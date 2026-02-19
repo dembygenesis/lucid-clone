@@ -15,6 +15,18 @@ import {
 } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
+// History entry for undo/redo
+interface HistoryEntry {
+  shapes: Shape[];
+  connectors: Connector[];
+}
+
+// Clipboard data
+interface ClipboardData {
+  shapes: Shape[];
+  connectors: Connector[];
+}
+
 interface DiagramState {
   // Diagram data
   diagramId: string | null;
@@ -35,6 +47,11 @@ interface DiagramState {
   // Connection state
   connectionState: ConnectionState;
 
+  // History for undo/redo
+  history: HistoryEntry[];
+  historyIndex: number;
+  clipboard: ClipboardData | null;
+
   // Actions
   setDiagram: (id: string, name: string, shapes: Shape[], connectors: Connector[], settings: DiagramSettings) => void;
   setDiagramName: (name: string) => void;
@@ -48,6 +65,7 @@ interface DiagramState {
   // Selection
   selectShape: (id: string, addToSelection?: boolean) => void;
   selectShapes: (ids: string[]) => void;
+  selectAll: () => void;
   clearSelection: () => void;
   setHoveredShape: (id: string | null) => void;
 
@@ -82,6 +100,18 @@ interface DiagramState {
   snapToGrid: (x: number, y: number) => { x: number; y: number };
   getShapeById: (id: string) => Shape | undefined;
   getConnectorById: (id: string) => Connector | undefined;
+
+  // Undo/Redo
+  undo: () => void;
+  redo: () => void;
+  saveToHistory: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+
+  // Copy/Paste/Duplicate
+  copy: () => void;
+  paste: () => void;
+  duplicate: () => void;
 }
 
 const initialConnectionState: ConnectionState = {
@@ -91,6 +121,8 @@ const initialConnectionState: ConnectionState = {
   currentX: 0,
   currentY: 0,
 };
+
+const MAX_HISTORY = 50;
 
 export const useDiagramStore = create<DiagramState>((set, get) => ({
   diagramId: null,
@@ -106,6 +138,9 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   zoom: 1,
   hoveredShapeId: null,
   connectionState: initialConnectionState,
+  history: [],
+  historyIndex: -1,
+  clipboard: null,
 
   setDiagram: (id, name, shapes, connectors, settings) => {
     set({
@@ -117,16 +152,128 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       selectedShapeIds: [],
       selectedConnectorIds: [],
       connectionState: initialConnectionState,
+      history: [{ shapes, connectors }],
+      historyIndex: 0,
     });
   },
 
   setDiagramName: (name) => set({ diagramName: name }),
 
+  saveToHistory: () => {
+    const { shapes, connectors, history, historyIndex } = get();
+    // Remove any future history if we're not at the end
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push({ shapes: [...shapes], connectors: [...connectors] });
+    // Limit history size
+    if (newHistory.length > MAX_HISTORY) {
+      newHistory.shift();
+    }
+    set({
+      history: newHistory,
+      historyIndex: newHistory.length - 1,
+    });
+  },
+
+  undo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex > 0) {
+      const prevState = history[historyIndex - 1];
+      set({
+        shapes: [...prevState.shapes],
+        connectors: [...prevState.connectors],
+        historyIndex: historyIndex - 1,
+        selectedShapeIds: [],
+        selectedConnectorIds: [],
+      });
+    }
+  },
+
+  redo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex < history.length - 1) {
+      const nextState = history[historyIndex + 1];
+      set({
+        shapes: [...nextState.shapes],
+        connectors: [...nextState.connectors],
+        historyIndex: historyIndex + 1,
+        selectedShapeIds: [],
+        selectedConnectorIds: [],
+      });
+    }
+  },
+
+  canUndo: () => get().historyIndex > 0,
+  canRedo: () => get().historyIndex < get().history.length - 1,
+
+  copy: () => {
+    const { shapes, connectors, selectedShapeIds, selectedConnectorIds } = get();
+    const selectedShapes = shapes.filter(s => selectedShapeIds.includes(s.id));
+
+    // Also copy connectors that connect selected shapes
+    const selectedConnectors = connectors.filter(c =>
+      selectedConnectorIds.includes(c.id) ||
+      (selectedShapeIds.includes(c.fromShapeId) && selectedShapeIds.includes(c.toShapeId))
+    );
+
+    if (selectedShapes.length > 0) {
+      set({
+        clipboard: {
+          shapes: selectedShapes,
+          connectors: selectedConnectors,
+        },
+      });
+    }
+  },
+
+  paste: () => {
+    const { clipboard, saveToHistory } = get();
+    if (!clipboard || clipboard.shapes.length === 0) return;
+
+    const PASTE_OFFSET = 20;
+
+    // Create ID mapping for shapes
+    const idMap = new Map<string, string>();
+    const newShapes: Shape[] = clipboard.shapes.map(shape => {
+      const newId = uuidv4();
+      idMap.set(shape.id, newId);
+      return {
+        ...shape,
+        id: newId,
+        x: shape.x + PASTE_OFFSET,
+        y: shape.y + PASTE_OFFSET,
+      };
+    });
+
+    // Create connectors with new IDs
+    const newConnectors: Connector[] = clipboard.connectors
+      .filter(c => idMap.has(c.fromShapeId) && idMap.has(c.toShapeId))
+      .map(connector => ({
+        ...connector,
+        id: uuidv4(),
+        fromShapeId: idMap.get(connector.fromShapeId)!,
+        toShapeId: idMap.get(connector.toShapeId)!,
+      }));
+
+    set(state => ({
+      shapes: [...state.shapes, ...newShapes],
+      connectors: [...state.connectors, ...newConnectors],
+      selectedShapeIds: newShapes.map(s => s.id),
+      selectedConnectorIds: [],
+    }));
+
+    saveToHistory();
+  },
+
+  duplicate: () => {
+    const { copy, paste } = get();
+    copy();
+    paste();
+  },
+
   addShape: (type, x, y, label) => {
     const state = get();
     const pos = state.snapToGrid(x, y);
 
-    // Get dimensions based on shape type
     let width = 100;
     let height = 100;
     let fill = DEFAULT_SHAPE_STYLE.fill;
@@ -158,7 +305,9 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       text: type === 'text' ? 'Text' : undefined,
       label: label || (isK8sShape(type) ? getK8sShapeMeta(type as K8sShapeType)?.label : undefined),
     };
+
     set({ shapes: [...state.shapes, shape] });
+    state.saveToHistory();
     return shape;
   },
 
@@ -168,9 +317,12 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
         s.id === id ? { ...s, ...updates } : s
       ),
     }));
+    // Don't save to history on every update (would flood history during drag)
+    // History is saved on drag end via the Canvas component
   },
 
   deleteShape: (id) => {
+    const { saveToHistory } = get();
     set((state) => ({
       shapes: state.shapes.filter((s) => s.id !== id),
       connectors: state.connectors.filter(
@@ -178,10 +330,13 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       ),
       selectedShapeIds: state.selectedShapeIds.filter((sid) => sid !== id),
     }));
+    saveToHistory();
   },
 
   deleteSelectedShapes: () => {
-    const { selectedShapeIds } = get();
+    const { selectedShapeIds, saveToHistory } = get();
+    if (selectedShapeIds.length === 0) return;
+
     set((state) => ({
       shapes: state.shapes.filter((s) => !selectedShapeIds.includes(s.id)),
       connectors: state.connectors.filter(
@@ -191,6 +346,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       ),
       selectedShapeIds: [],
     }));
+    saveToHistory();
   },
 
   selectShape: (id, addToSelection = false) => {
@@ -206,17 +362,23 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
 
   selectShapes: (ids) => set({ selectedShapeIds: ids, selectedConnectorIds: [] }),
 
+  selectAll: () => {
+    const { shapes, connectors } = get();
+    set({
+      selectedShapeIds: shapes.map(s => s.id),
+      selectedConnectorIds: connectors.map(c => c.id),
+    });
+  },
+
   clearSelection: () => set({ selectedShapeIds: [], selectedConnectorIds: [] }),
 
   setHoveredShape: (id) => set({ hoveredShapeId: id }),
 
   addConnector: (fromId, toId, fromAnchor, toAnchor) => {
-    // Don't allow connecting shape to itself
     if (fromId === toId) {
       throw new Error('Cannot connect shape to itself');
     }
 
-    // Check if connector already exists
     const existingConnector = get().connectors.find(
       (c) =>
         (c.fromShapeId === fromId && c.toShapeId === toId) ||
@@ -234,7 +396,10 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       toAnchor,
       ...DEFAULT_CONNECTOR_STYLE,
     };
+
+    const { saveToHistory } = get();
     set((state) => ({ connectors: [...state.connectors, connector] }));
+    saveToHistory();
     return connector;
   },
 
@@ -247,10 +412,12 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   deleteConnector: (id) => {
+    const { saveToHistory } = get();
     set((state) => ({
       connectors: state.connectors.filter((c) => c.id !== id),
       selectedConnectorIds: state.selectedConnectorIds.filter((cid) => cid !== id),
     }));
+    saveToHistory();
   },
 
   selectConnector: (id, addToSelection = false) => {
@@ -265,11 +432,14 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   deleteSelectedConnectors: () => {
-    const { selectedConnectorIds } = get();
+    const { selectedConnectorIds, saveToHistory } = get();
+    if (selectedConnectorIds.length === 0) return;
+
     set((state) => ({
       connectors: state.connectors.filter((c) => !selectedConnectorIds.includes(c.id)),
       selectedConnectorIds: [],
     }));
+    saveToHistory();
   },
 
   startConnection: (shapeId, anchor, x, y) => {
@@ -302,7 +472,6 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       connectionState.fromAnchor &&
       connectionState.fromShapeId !== shapeId
     ) {
-      // Verify both shapes still exist
       const fromShapeExists = shapes.some(s => s.id === connectionState.fromShapeId);
       const toShapeExists = shapes.some(s => s.id === shapeId);
 
@@ -315,7 +484,6 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
             anchor
           );
         } catch (e) {
-          // Ignore duplicate connections
           console.warn('Connection failed:', e);
         }
       }

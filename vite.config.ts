@@ -10,4 +10,8 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['lucid-wasm'],
   },
+  test: {
+    environment: 'jsdom',
+    exclude: ['**/node_modules/**', '**/e2e/**'],
+  },
 });

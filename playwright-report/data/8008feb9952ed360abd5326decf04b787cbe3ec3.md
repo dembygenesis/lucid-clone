@@ -1,0 +1,75 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - button "←" [ref=e5] [cursor=pointer]
+    - textbox [ref=e6]: Untitled Diagram
+  - generic [ref=e7]:
+    - button "↩" [disabled] [ref=e8]
+    - button "↪" [disabled] [ref=e9]
+    - button "↖" [ref=e11] [cursor=pointer]
+    - button "✋" [ref=e12] [cursor=pointer]
+    - button "↗" [ref=e14] [cursor=pointer]
+    - button "▢" [ref=e16] [cursor=pointer]
+    - button "○" [ref=e17] [cursor=pointer]
+    - button "◇" [ref=e18] [cursor=pointer]
+    - button "T" [ref=e19] [cursor=pointer]
+    - button "−" [active] [ref=e21] [cursor=pointer]
+    - generic [ref=e22]: 90%
+    - button "+" [ref=e23] [cursor=pointer]
+  - generic [ref=e24]:
+    - generic [ref=e25]:
+      - generic [ref=e26]:
+        - generic [ref=e27]: ☸
+        - generic [ref=e28]: Kubernetes
+      - button "×" [ref=e29] [cursor=pointer]
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - button "Workloads ›" [ref=e32] [cursor=pointer]:
+          - text: Workloads
+          - generic [ref=e33]: ›
+        - generic [ref=e34]:
+          - button "Pod" [ref=e35]:
+            - img [ref=e36]
+            - generic [ref=e38]: Pod
+          - button "Deployment" [ref=e39]:
+            - img [ref=e40]
+            - generic [ref=e42]: Deployment
+          - button "StatefulSet" [ref=e43]:
+            - img [ref=e44]
+            - generic [ref=e46]: StatefulSet
+          - button "DaemonSet" [ref=e47]:
+            - img [ref=e48]
+            - generic [ref=e50]: DaemonSet
+          - button "Job" [ref=e51]:
+            - img [ref=e52]
+            - generic [ref=e54]: Job
+          - button "CronJob" [ref=e55]:
+            - img [ref=e56]
+            - generic [ref=e58]: CronJob
+      - generic [ref=e59]:
+        - button "Network ›" [ref=e60] [cursor=pointer]:
+          - text: Network
+          - generic [ref=e61]: ›
+        - generic [ref=e62]:
+          - button "Service" [ref=e63]:
+            - img [ref=e64]
+            - generic [ref=e66]: Service
+          - button "Ingress" [ref=e67]:
+            - img [ref=e68]
+            - generic [ref=e70]: Ingress
+          - button "NetworkPolicy" [ref=e71]:
+            - img [ref=e72]
+            - generic [ref=e74]: NetworkPolicy
+      - button "Config ›" [ref=e76] [cursor=pointer]:
+        - text: Config
+        - generic [ref=e77]: ›
+      - button "Storage ›" [ref=e79] [cursor=pointer]:
+        - text: Storage
+        - generic [ref=e80]: ›
+      - button "Cluster ›" [ref=e82] [cursor=pointer]:
+        - text: Cluster
+        - generic [ref=e83]: ›
+    - generic [ref=e84]: Click or drag to add shapes
+```

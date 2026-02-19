@@ -10,7 +10,10 @@
     "wasm:build": "cd wasm && wasm-pack build --target web --out-dir ../src/wasm/pkg",
     "wasm:dev": "cd wasm && cargo watch -s 'wasm-pack build --target web --out-dir ../src/wasm/pkg'",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "idb": "^8.0.0",
@@ -23,6 +26,7 @@
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "@types/uuid": "^9.0.7",

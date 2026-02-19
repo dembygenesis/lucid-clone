@@ -30,6 +30,10 @@ export function Toolbar() {
     selectedConnectorIds,
     connectionState,
     cancelConnection,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
   } = useDiagramStore();
 
   const hasSelection = selectedShapeIds.length > 0 || selectedConnectorIds.length > 0;
@@ -55,6 +59,52 @@ export function Toolbar() {
         zIndex: 100,
       }}
     >
+      {/* Undo/Redo */}
+      <button
+        onClick={undo}
+        disabled={!canUndo()}
+        title="Undo (Ctrl+Z)"
+        style={{
+          width: 36,
+          height: 36,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 16,
+          border: 'none',
+          borderRadius: 6,
+          cursor: canUndo() ? 'pointer' : 'not-allowed',
+          backgroundColor: '#f3f4f6',
+          color: canUndo() ? '#374151' : '#9ca3af',
+          opacity: canUndo() ? 1 : 0.5,
+        }}
+      >
+        ↩
+      </button>
+      <button
+        onClick={redo}
+        disabled={!canRedo()}
+        title="Redo (Ctrl+Shift+Z)"
+        style={{
+          width: 36,
+          height: 36,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 16,
+          border: 'none',
+          borderRadius: 6,
+          cursor: canRedo() ? 'pointer' : 'not-allowed',
+          backgroundColor: '#f3f4f6',
+          color: canRedo() ? '#374151' : '#9ca3af',
+          opacity: canRedo() ? 1 : 0.5,
+        }}
+      >
+        ↪
+      </button>
+
+      <Divider />
+
       {/* Navigation tools */}
       {tools
         .filter((t) => t.group === 'navigation')

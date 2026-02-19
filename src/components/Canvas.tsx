@@ -68,28 +68,98 @@ export function Canvas({ width, height }: CanvasProps) {
     transformerRef.current.getLayer()?.batchDraw();
   }, [selectedShapeIds, shapes]);
 
-  // Handle keyboard shortcuts
+  // Get undo/redo/copy/paste/duplicate/selectAll from store
+  const { undo, redo, copy, paste, duplicate, selectAll } = useDiagramStore();
+
+  // Handle keyboard shortcuts (Lucidchart-like)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if typing in input
+      if (document.activeElement?.tagName === 'INPUT') return;
+
+      const isMeta = e.metaKey || e.ctrlKey;
+
+      // Escape - cancel connection or clear selection
       if (e.key === 'Escape') {
         if (connectionState.isConnecting) {
           cancelConnection();
         } else {
           clearSelection();
         }
+        return;
       }
+
+      // Delete/Backspace - delete selected
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (document.activeElement?.tagName !== 'INPUT') {
-          e.preventDefault();
-          deleteSelectedShapes();
-          deleteSelectedConnectors();
-        }
+        e.preventDefault();
+        deleteSelectedShapes();
+        deleteSelectedConnectors();
+        return;
+      }
+
+      // Ctrl/Cmd + Z - Undo
+      if (isMeta && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      // Ctrl/Cmd + Shift + Z or Ctrl/Cmd + Y - Redo
+      if ((isMeta && e.key === 'z' && e.shiftKey) || (isMeta && e.key === 'y')) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
+      // Ctrl/Cmd + C - Copy
+      if (isMeta && e.key === 'c') {
+        e.preventDefault();
+        copy();
+        return;
+      }
+
+      // Ctrl/Cmd + V - Paste
+      if (isMeta && e.key === 'v') {
+        e.preventDefault();
+        paste();
+        return;
+      }
+
+      // Ctrl/Cmd + D - Duplicate
+      if (isMeta && e.key === 'd') {
+        e.preventDefault();
+        duplicate();
+        return;
+      }
+
+      // Ctrl/Cmd + A - Select All
+      if (isMeta && e.key === 'a') {
+        e.preventDefault();
+        selectAll();
+        return;
+      }
+
+      // Tool shortcuts
+      if (e.key === 'v' || e.key === 'V') {
+        setTool('select');
+      } else if (e.key === 'h' || e.key === 'H') {
+        setTool('pan');
+      } else if (e.key === 'c' && !isMeta) {
+        setTool('connector');
+      } else if (e.key === 'r' || e.key === 'R') {
+        setTool('rectangle');
+      } else if (e.key === 'o' || e.key === 'O') {
+        setTool('circle');
+      } else if (e.key === 'd' && !isMeta) {
+        setTool('diamond');
+      } else if (e.key === 't' || e.key === 'T') {
+        setTool('text');
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors]);
+  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors, undo, redo, copy, paste, duplicate, selectAll, setTool]);
 
   const getPointerPosition = useCallback(() => {
     const stage = stageRef.current;
