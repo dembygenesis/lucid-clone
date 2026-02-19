@@ -295,23 +295,29 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   endConnection: (shapeId, anchor) => {
-    const { connectionState, addConnector } = get();
+    const { connectionState, addConnector, shapes } = get();
     if (
       connectionState.isConnecting &&
       connectionState.fromShapeId &&
       connectionState.fromAnchor &&
       connectionState.fromShapeId !== shapeId
     ) {
-      try {
-        addConnector(
-          connectionState.fromShapeId,
-          shapeId,
-          connectionState.fromAnchor,
-          anchor
-        );
-      } catch (e) {
-        // Ignore duplicate connections
-        console.warn('Connection failed:', e);
+      // Verify both shapes still exist
+      const fromShapeExists = shapes.some(s => s.id === connectionState.fromShapeId);
+      const toShapeExists = shapes.some(s => s.id === shapeId);
+
+      if (fromShapeExists && toShapeExists) {
+        try {
+          addConnector(
+            connectionState.fromShapeId,
+            shapeId,
+            connectionState.fromAnchor,
+            anchor
+          );
+        } catch (e) {
+          // Ignore duplicate connections
+          console.warn('Connection failed:', e);
+        }
       }
     }
     set({ connectionState: initialConnectionState });

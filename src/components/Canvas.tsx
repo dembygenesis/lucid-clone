@@ -180,7 +180,7 @@ export function Canvas({ width, height }: CanvasProps) {
     [connectionState.isConnecting, activeTool, startConnection, endConnection]
   );
 
-  const renderAnchors = (shape: Shape) => {
+  const renderAnchors = (shape: Shape, relative = false) => {
     const showAnchors =
       activeTool === 'connector' ||
       selectedShapeIds.includes(shape.id) ||
@@ -191,29 +191,35 @@ export function Canvas({ width, height }: CanvasProps) {
 
     const anchors = getShapeAnchors(shape);
 
-    return anchors.map((anchor) => (
-      <Circle
-        key={`anchor-${shape.id}-${anchor.position}`}
-        x={anchor.x}
-        y={anchor.y}
-        radius={ANCHOR_RADIUS}
-        fill={connectionState.isConnecting ? '#22c55e' : '#3b82f6'}
-        stroke="#fff"
-        strokeWidth={2}
-        hitStrokeWidth={ANCHOR_HIT_RADIUS}
-        onMouseDown={(e) => {
-          e.cancelBubble = true;
-          handleAnchorClick(shape.id, anchor.position, anchor.x, anchor.y);
-        }}
-        onMouseUp={(e) => {
-          e.cancelBubble = true;
-          if (connectionState.isConnecting && connectionState.fromShapeId !== shape.id) {
-            endConnection(shape.id, anchor.position);
-          }
-        }}
-        style={{ cursor: 'crosshair' }}
-      />
-    ));
+    return anchors.map((anchor) => {
+      // If relative, subtract shape position (for anchors inside positioned Groups)
+      const x = relative ? anchor.x - shape.x : anchor.x;
+      const y = relative ? anchor.y - shape.y : anchor.y;
+
+      return (
+        <Circle
+          key={`anchor-${shape.id}-${anchor.position}`}
+          x={x}
+          y={y}
+          radius={ANCHOR_RADIUS}
+          fill={connectionState.isConnecting ? '#22c55e' : '#3b82f6'}
+          stroke="#fff"
+          strokeWidth={2}
+          hitStrokeWidth={ANCHOR_HIT_RADIUS}
+          onMouseDown={(e) => {
+            e.cancelBubble = true;
+            handleAnchorClick(shape.id, anchor.position, anchor.x, anchor.y);
+          }}
+          onMouseUp={(e) => {
+            e.cancelBubble = true;
+            if (connectionState.isConnecting && connectionState.fromShapeId !== shape.id) {
+              endConnection(shape.id, anchor.position);
+            }
+          }}
+          style={{ cursor: 'crosshair' }}
+        />
+      );
+    });
   };
 
   const renderShape = (shape: Shape) => {
@@ -292,7 +298,7 @@ export function Canvas({ width, height }: CanvasProps) {
             align="center"
             verticalAlign="middle"
           />
-          {renderAnchors(shape)}
+          {renderAnchors(shape, true)}
         </Group>
       );
     }
