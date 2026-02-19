@@ -1,0 +1,35 @@
+{
+  "name": "lucid-clone",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run wasm:build && vite build",
+    "preview": "vite preview",
+    "wasm:build": "cd wasm && wasm-pack build --target web --out-dir ../src/wasm/pkg",
+    "wasm:dev": "cd wasm && cargo watch -s 'wasm-pack build --target web --out-dir ../src/wasm/pkg'",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "idb": "^8.0.0",
+    "konva": "^9.3.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-konva": "^18.2.10",
+    "react-router-dom": "^6.21.3",
+    "uuid": "^9.0.1",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.48",
+    "@types/react-dom": "^18.2.18",
+    "@types/uuid": "^9.0.7",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vite-plugin-wasm": "^3.3.0",
+    "vitest": "^1.2.1"
+  }
+}
