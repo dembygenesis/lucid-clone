@@ -546,3 +546,336 @@ describe('View and zoom during connection', () => {
     expect(state.viewPosition).toEqual({ x: 100, y: 100 });
   });
 });
+
+describe('Shape resize with connectors', () => {
+  it('should update connector anchor positions when shape is resized', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    // Create connector from right of shape1 to left of shape2
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    // Get initial anchor positions
+    const initialShape1 = useDiagramStore.getState().shapes[0];
+    const initialRightAnchor = getAnchorPoint(initialShape1, 'right');
+    expect(initialRightAnchor.x).toBe(200); // 100 + 100
+
+    // Resize shape1 to be wider
+    store.updateShape(shape1.id, { width: 150 });
+
+    // Anchor should move with the new width
+    const updatedShape1 = useDiagramStore.getState().shapes[0];
+    const updatedRightAnchor = getAnchorPoint(updatedShape1, 'right');
+    expect(updatedRightAnchor.x).toBe(250); // 100 + 150
+  });
+
+  it('should update all anchor positions when shape is resized', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    // Initial anchors (100x100 shape at position 100,100)
+    let anchors = getShapeAnchors(useDiagramStore.getState().shapes[0]);
+    expect(anchors.find(a => a.position === 'top')).toEqual({ position: 'top', x: 150, y: 100 });
+    expect(anchors.find(a => a.position === 'right')).toEqual({ position: 'right', x: 200, y: 150 });
+    expect(anchors.find(a => a.position === 'bottom')).toEqual({ position: 'bottom', x: 150, y: 200 });
+    expect(anchors.find(a => a.position === 'left')).toEqual({ position: 'left', x: 100, y: 150 });
+
+    // Resize to 200x150
+    store.updateShape(shape.id, { width: 200, height: 150 });
+
+    // Anchors should update
+    anchors = getShapeAnchors(useDiagramStore.getState().shapes[0]);
+    expect(anchors.find(a => a.position === 'top')).toEqual({ position: 'top', x: 200, y: 100 }); // 100 + 200/2
+    expect(anchors.find(a => a.position === 'right')).toEqual({ position: 'right', x: 300, y: 175 }); // x: 100+200, y: 100+150/2
+    expect(anchors.find(a => a.position === 'bottom')).toEqual({ position: 'bottom', x: 200, y: 250 }); // y: 100+150
+    expect(anchors.find(a => a.position === 'left')).toEqual({ position: 'left', x: 100, y: 175 });
+  });
+
+  it('should maintain connectors when shape is moved', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    expect(useDiagramStore.getState().connectors).toHaveLength(1);
+
+    // Move shape1
+    store.updateShape(shape1.id, { x: 50, y: 50 });
+
+    // Connector should still exist
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(1);
+
+    // Anchor positions should update
+    const movedShape = state.shapes[0];
+    const rightAnchor = getAnchorPoint(movedShape, 'right');
+    expect(rightAnchor.x).toBe(150); // 50 + 100
+    expect(rightAnchor.y).toBe(100); // 50 + 100/2
+  });
+
+  it('should handle resize of both connected shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    // Resize both shapes
+    store.updateShape(shape1.id, { width: 150 });
+    store.updateShape(shape2.id, { width: 150, x: 350 });
+
+    const state = useDiagramStore.getState();
+    const s1 = state.shapes.find(s => s.id === shape1.id)!;
+    const s2 = state.shapes.find(s => s.id === shape2.id)!;
+
+    // Verify anchor positions updated
+    expect(getAnchorPoint(s1, 'right').x).toBe(250); // 100 + 150
+    expect(getAnchorPoint(s2, 'left').x).toBe(350); // 350 + 0
+  });
+
+  it('should update K8s shape anchors on resize', () => {
+    const store = useDiagramStore.getState();
+    const pod = store.addShape('k8s-pod', 100, 100);
+
+    // K8s pod default is 80x80
+    let podShape = useDiagramStore.getState().shapes[0];
+    expect(podShape.width).toBe(80);
+    expect(podShape.height).toBe(80);
+
+    let anchors = getShapeAnchors(podShape);
+    expect(anchors.find(a => a.position === 'right')?.x).toBe(180); // 100 + 80
+
+    // Resize the pod
+    store.updateShape(pod.id, { width: 120, height: 120 });
+
+    podShape = useDiagramStore.getState().shapes[0];
+    anchors = getShapeAnchors(podShape);
+    expect(anchors.find(a => a.position === 'right')?.x).toBe(220); // 100 + 120
+    expect(anchors.find(a => a.position === 'bottom')?.y).toBe(220); // 100 + 120
+  });
+
+  it('should handle connector between K8s shapes after resize', () => {
+    const store = useDiagramStore.getState();
+    const pod = store.addShape('k8s-pod', 100, 100);
+    const service = store.addShape('k8s-service', 300, 100);
+
+    store.startConnection(pod.id, 'right', 180, 140);
+    store.endConnection(service.id, 'left');
+
+    expect(useDiagramStore.getState().connectors).toHaveLength(1);
+
+    // Resize pod
+    store.updateShape(pod.id, { width: 120, height: 100 });
+
+    // Connector should still exist and shapes should have correct anchors
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(1);
+
+    const podShape = state.shapes.find(s => s.id === pod.id)!;
+    expect(getAnchorPoint(podShape, 'right').x).toBe(220); // 100 + 120
+  });
+
+  it('should handle multiple connectors during resize', () => {
+    const store = useDiagramStore.getState();
+    const center = store.addShape('rectangle', 200, 200);
+    const top = store.addShape('rectangle', 200, 50);
+    const right = store.addShape('rectangle', 350, 200);
+    const bottom = store.addShape('rectangle', 200, 350);
+
+    // Connect center to all others
+    store.startConnection(center.id, 'top', 250, 200);
+    store.endConnection(top.id, 'bottom');
+
+    store.startConnection(center.id, 'right', 300, 250);
+    store.endConnection(right.id, 'left');
+
+    store.startConnection(center.id, 'bottom', 250, 300);
+    store.endConnection(bottom.id, 'top');
+
+    expect(useDiagramStore.getState().connectors).toHaveLength(3);
+
+    // Resize center shape
+    store.updateShape(center.id, { width: 150, height: 150 });
+
+    // All connectors should still exist
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(3);
+
+    // Center shape anchors should be updated
+    const centerShape = state.shapes.find(s => s.id === center.id)!;
+    expect(getAnchorPoint(centerShape, 'top').x).toBe(275); // 200 + 150/2
+    expect(getAnchorPoint(centerShape, 'right').x).toBe(350); // 200 + 150
+    expect(getAnchorPoint(centerShape, 'bottom').y).toBe(350); // 200 + 150
+  });
+
+  it('should handle shape rotation with connectors', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    // Rotate shape1
+    store.updateShape(shape1.id, { rotation: 45 });
+
+    // Connector should still exist
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(1);
+    expect(state.shapes[0].rotation).toBe(45);
+  });
+
+  it('should update connector positions when shape height changes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 300);
+
+    // Connect bottom of shape1 to top of shape2
+    store.startConnection(shape1.id, 'bottom', 150, 200);
+    store.endConnection(shape2.id, 'top');
+
+    // Initial positions
+    let s1 = useDiagramStore.getState().shapes[0];
+    expect(getAnchorPoint(s1, 'bottom').y).toBe(200); // 100 + 100
+
+    // Make shape1 taller
+    store.updateShape(shape1.id, { height: 150 });
+
+    s1 = useDiagramStore.getState().shapes[0];
+    expect(getAnchorPoint(s1, 'bottom').y).toBe(250); // 100 + 150
+  });
+
+  it('should handle diamond shape resize with connectors', () => {
+    const store = useDiagramStore.getState();
+    const diamond = store.addShape('diamond', 100, 100);
+    const rect = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(diamond.id, 'right', 200, 150);
+    store.endConnection(rect.id, 'left');
+
+    // Resize diamond
+    store.updateShape(diamond.id, { width: 150, height: 150 });
+
+    const state = useDiagramStore.getState();
+    const diamondShape = state.shapes.find(s => s.id === diamond.id)!;
+
+    // Right anchor should be at x + width
+    expect(getAnchorPoint(diamondShape, 'right').x).toBe(250); // 100 + 150
+    expect(state.connectors).toHaveLength(1);
+  });
+
+  it('should handle circle shape resize with connectors', () => {
+    const store = useDiagramStore.getState();
+    const circle = store.addShape('circle', 100, 100);
+    const rect = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(circle.id, 'right', 200, 150);
+    store.endConnection(rect.id, 'left');
+
+    // Resize circle
+    store.updateShape(circle.id, { width: 150, height: 150 });
+
+    const state = useDiagramStore.getState();
+    const circleShape = state.shapes.find(s => s.id === circle.id)!;
+
+    expect(getAnchorPoint(circleShape, 'right').x).toBe(250); // 100 + 150
+    expect(getAnchorPoint(circleShape, 'right').y).toBe(175); // 100 + 150/2
+    expect(state.connectors).toHaveLength(1);
+  });
+});
+
+describe('Shape interchangeability', () => {
+  it('should connect any shape type to any other shape type', () => {
+    const store = useDiagramStore.getState();
+
+    // Create different shape types
+    const rect = store.addShape('rectangle', 100, 100);
+    const circle = store.addShape('circle', 250, 100);
+    const diamond = store.addShape('diamond', 400, 100);
+    const text = store.addShape('text', 550, 100);
+    const pod = store.addShape('k8s-pod', 700, 100);
+
+    // Connect rect -> circle
+    store.startConnection(rect.id, 'right', 200, 150);
+    store.endConnection(circle.id, 'left');
+
+    // Connect circle -> diamond
+    store.startConnection(circle.id, 'right', 350, 150);
+    store.endConnection(diamond.id, 'left');
+
+    // Connect diamond -> text
+    store.startConnection(diamond.id, 'right', 500, 150);
+    store.endConnection(text.id, 'left');
+
+    // Connect text -> pod
+    store.startConnection(text.id, 'right', 650, 120);
+    store.endConnection(pod.id, 'left');
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(4);
+  });
+
+  it('should connect K8s shapes to basic shapes bidirectionally', () => {
+    const store = useDiagramStore.getState();
+
+    const pod = store.addShape('k8s-pod', 100, 100);
+    const rect = store.addShape('rectangle', 300, 100);
+    const service = store.addShape('k8s-service', 100, 300);
+
+    // K8s -> basic
+    store.startConnection(pod.id, 'right', 180, 140);
+    store.endConnection(rect.id, 'left');
+
+    // basic -> K8s
+    store.startConnection(rect.id, 'bottom', 350, 200);
+    store.endConnection(service.id, 'top');
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(2);
+  });
+
+  it('should handle all anchor positions for all shape types', () => {
+    const store = useDiagramStore.getState();
+
+    const shapes = [
+      store.addShape('rectangle', 100, 100),
+      store.addShape('circle', 100, 250),
+      store.addShape('diamond', 100, 400),
+      store.addShape('k8s-pod', 100, 550),
+    ];
+
+    // Verify all shapes have 4 anchors
+    for (const shape of shapes) {
+      const currentShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id)!;
+      const anchors = getShapeAnchors(currentShape);
+      expect(anchors).toHaveLength(4);
+      expect(anchors.map(a => a.position).sort()).toEqual(['bottom', 'left', 'right', 'top']);
+    }
+  });
+
+  it('should maintain connectors after shape type specific properties change', () => {
+    const store = useDiagramStore.getState();
+
+    const rect = store.addShape('rectangle', 100, 100);
+    const pod = store.addShape('k8s-pod', 300, 100);
+
+    store.startConnection(rect.id, 'right', 200, 150);
+    store.endConnection(pod.id, 'left');
+
+    // Change rect fill
+    store.updateShape(rect.id, { fill: '#ff0000' });
+
+    // Change pod label
+    store.updateShape(pod.id, { label: 'My Pod' });
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(1);
+    expect(state.shapes.find(s => s.id === rect.id)?.fill).toBe('#ff0000');
+    expect(state.shapes.find(s => s.id === pod.id)?.label).toBe('My Pod');
+  });
+});

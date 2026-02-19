@@ -9,7 +9,6 @@ import {
   AnchorPosition,
   getShapeAnchors,
   getAnchorPoint,
-  findNearestAnchor,
   isK8sShape,
   K8sShapeType,
 } from '../types';
@@ -105,7 +104,6 @@ export function Canvas({ width, height }: CanvasProps) {
 
   const handleStageClick = useCallback(
     (e: KonvaEventObject<MouseEvent>) => {
-      // Click on empty area
       if (e.target === e.target.getStage()) {
         if (connectionState.isConnecting) {
           cancelConnection();
@@ -134,7 +132,6 @@ export function Canvas({ width, height }: CanvasProps) {
   const handleWheel = useCallback(
     (e: KonvaEventObject<WheelEvent>) => {
       e.evt.preventDefault();
-
       const stage = stageRef.current;
       if (!stage) return;
 
@@ -180,7 +177,9 @@ export function Canvas({ width, height }: CanvasProps) {
     [connectionState.isConnecting, activeTool, startConnection, endConnection]
   );
 
-  const renderAnchors = (shape: Shape, relative = false) => {
+  // Render anchor points for a shape
+  // anchorOffset: if the shape group is positioned, we need relative coords
+  const renderAnchors = (shape: Shape, useRelativeCoords = false) => {
     const showAnchors =
       activeTool === 'connector' ||
       selectedShapeIds.includes(shape.id) ||
@@ -192,9 +191,8 @@ export function Canvas({ width, height }: CanvasProps) {
     const anchors = getShapeAnchors(shape);
 
     return anchors.map((anchor) => {
-      // If relative, subtract shape position (for anchors inside positioned Groups)
-      const x = relative ? anchor.x - shape.x : anchor.x;
-      const y = relative ? anchor.y - shape.y : anchor.y;
+      const x = useRelativeCoords ? anchor.x - shape.x : anchor.x;
+      const y = useRelativeCoords ? anchor.y - shape.y : anchor.y;
 
       return (
         <Circle
@@ -225,36 +223,81 @@ export function Canvas({ width, height }: CanvasProps) {
   const renderShape = (shape: Shape) => {
     const isSelected = selectedShapeIds.includes(shape.id);
 
-    const commonProps = {
+    // Common handlers for all shapes - applied to the outer Group
+    const handleClick = (e: KonvaEventObject<MouseEvent>) => {
+      if (connectionState.isConnecting) return;
+      e.cancelBubble = true;
+      selectShape(shape.id, e.evt.shiftKey);
+    };
+
+    // Real-time position update during drag (for connector live updates)
+    const handleDragMove = (e: KonvaEventObject<DragEvent>) => {
+      const node = e.target;
+      // Update shape position in real-time for connector updates
+      updateShape(shape.id, {
+        x: node.x(),
+        y: node.y(),
+      });
+    };
+
+    const handleDragEnd = (e: KonvaEventObject<DragEvent>) => {
+      const { snapToGrid } = useDiagramStore.getState();
+      const snapped = snapToGrid(e.target.x(), e.target.y());
+      updateShape(shape.id, { x: snapped.x, y: snapped.y });
+      // Reset position to snapped values
+      e.target.x(snapped.x);
+      e.target.y(snapped.y);
+    };
+
+    // Real-time size update during transform (for connector live updates)
+    const handleTransform = (e: KonvaEventObject<Event>) => {
+      const node = e.target;
+      const scaleX = node.scaleX();
+      const scaleY = node.scaleY();
+
+      // Update shape in real-time
+      updateShape(shape.id, {
+        x: node.x(),
+        y: node.y(),
+        width: Math.max(20, shape.width * scaleX),
+        height: Math.max(20, shape.height * scaleY),
+        rotation: node.rotation(),
+      });
+    };
+
+    const handleTransformEnd = (e: KonvaEventObject<Event>) => {
+      const node = e.target;
+      const scaleX = node.scaleX();
+      const scaleY = node.scaleY();
+
+      updateShape(shape.id, {
+        x: node.x(),
+        y: node.y(),
+        width: Math.max(20, shape.width * scaleX),
+        height: Math.max(20, shape.height * scaleY),
+        rotation: node.rotation(),
+      });
+
+      // Reset scale after applying to dimensions
+      node.scaleX(1);
+      node.scaleY(1);
+    };
+
+    const groupProps = {
       id: `shape-${shape.id}`,
       x: shape.x,
       y: shape.y,
+      width: shape.width,
+      height: shape.height,
       rotation: shape.rotation,
       draggable: activeTool === 'select' && !connectionState.isConnecting,
-      onClick: (e: KonvaEventObject<MouseEvent>) => {
-        if (connectionState.isConnecting) return;
-        e.cancelBubble = true;
-        selectShape(shape.id, e.evt.shiftKey);
-      },
+      onClick: handleClick,
       onMouseEnter: () => setHoveredShape(shape.id),
       onMouseLeave: () => setHoveredShape(null),
-      onDragEnd: (e: KonvaEventObject<DragEvent>) => {
-        const { snapToGrid } = useDiagramStore.getState();
-        const snapped = snapToGrid(e.target.x(), e.target.y());
-        updateShape(shape.id, { x: snapped.x, y: snapped.y });
-      },
-      onTransformEnd: (e: KonvaEventObject<Event>) => {
-        const node = e.target;
-        updateShape(shape.id, {
-          x: node.x(),
-          y: node.y(),
-          width: Math.max(20, node.width() * node.scaleX()),
-          height: Math.max(20, node.height() * node.scaleY()),
-          rotation: node.rotation(),
-        });
-        node.scaleX(1);
-        node.scaleY(1);
-      },
+      onDragMove: handleDragMove,
+      onDragEnd: handleDragEnd,
+      onTransform: handleTransform,
+      onTransformEnd: handleTransformEnd,
     };
 
     // Render K8s shapes
@@ -263,8 +306,7 @@ export function Canvas({ width, height }: CanvasProps) {
       const label = shape.label || K8S_LABELS[shape.type as K8sShapeType];
 
       return (
-        <Group key={shape.id} {...commonProps}>
-          {/* Background */}
+        <Group key={shape.id} {...groupProps}>
           <Rect
             width={shape.width}
             height={shape.height}
@@ -276,7 +318,6 @@ export function Canvas({ width, height }: CanvasProps) {
             shadowBlur={8}
             shadowOffset={{ x: 0, y: 2 }}
           />
-          {/* Icon */}
           <Path
             data={iconPath}
             fill={shape.fill}
@@ -285,7 +326,6 @@ export function Canvas({ width, height }: CanvasProps) {
             scaleX={1}
             scaleY={1}
           />
-          {/* Label */}
           <Text
             text={label}
             x={0}
@@ -303,13 +343,12 @@ export function Canvas({ width, height }: CanvasProps) {
       );
     }
 
-    // Render basic shapes
+    // Render basic shapes - all use Group with relative children
     switch (shape.type) {
       case 'rectangle':
         return (
-          <Group key={shape.id}>
+          <Group key={shape.id} {...groupProps}>
             <Rect
-              {...commonProps}
               width={shape.width}
               height={shape.height}
               fill={shape.fill}
@@ -317,24 +356,23 @@ export function Canvas({ width, height }: CanvasProps) {
               strokeWidth={isSelected ? 3 : shape.strokeWidth}
               cornerRadius={4}
             />
-            {renderAnchors(shape)}
+            {renderAnchors(shape, true)}
           </Group>
         );
 
       case 'circle':
         return (
-          <Group key={shape.id}>
+          <Group key={shape.id} {...groupProps}>
             <Circle
-              {...commonProps}
-              x={shape.x + shape.width / 2}
-              y={shape.y + shape.height / 2}
+              x={shape.width / 2}
+              y={shape.height / 2}
               radiusX={shape.width / 2}
               radiusY={shape.height / 2}
               fill={shape.fill}
               stroke={isSelected ? '#3b82f6' : shape.stroke}
               strokeWidth={isSelected ? 3 : shape.strokeWidth}
             />
-            {renderAnchors(shape)}
+            {renderAnchors(shape, true)}
           </Group>
         );
 
@@ -346,24 +384,27 @@ export function Canvas({ width, height }: CanvasProps) {
           0, shape.height / 2,
         ];
         return (
-          <Group key={shape.id}>
+          <Group key={shape.id} {...groupProps}>
             <Line
-              {...commonProps}
               points={points}
               closed
               fill={shape.fill}
               stroke={isSelected ? '#3b82f6' : shape.stroke}
               strokeWidth={isSelected ? 3 : shape.strokeWidth}
             />
-            {renderAnchors(shape)}
+            {renderAnchors(shape, true)}
           </Group>
         );
 
       case 'text':
         return (
-          <Group key={shape.id}>
+          <Group key={shape.id} {...groupProps}>
+            <Rect
+              width={shape.width}
+              height={shape.height}
+              fill="transparent"
+            />
             <Text
-              {...commonProps}
               text={shape.text || 'Text'}
               fontSize={16}
               fill={shape.fill}
@@ -372,7 +413,7 @@ export function Canvas({ width, height }: CanvasProps) {
               align="center"
               verticalAlign="middle"
             />
-            {renderAnchors(shape)}
+            {renderAnchors(shape, true)}
           </Group>
         );
 
@@ -394,7 +435,6 @@ export function Canvas({ width, height }: CanvasProps) {
     let points: number[] = [];
 
     if (connector.style === 'elbow') {
-      // Calculate elbow points
       const midX = (from.x + to.x) / 2;
       const midY = (from.y + to.y) / 2;
 
@@ -519,6 +559,8 @@ export function Canvas({ width, height }: CanvasProps) {
         {shapes.map(renderShape)}
         <Transformer
           ref={transformerRef}
+          rotateEnabled={true}
+          enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'top-center', 'bottom-center']}
           boundBoxFunc={(oldBox, newBox) => {
             if (newBox.width < 20 || newBox.height < 20) {
               return oldBox;
