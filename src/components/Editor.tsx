@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Canvas } from './Canvas';
 import { Toolbar } from './Toolbar';
+import { K8sSidebar } from './K8sSidebar';
 import { useDiagramStore } from '../store';
 import { getDiagram, saveDiagram, createDiagram } from '../utils/db';
+import { isK8sShape, K8sShapeType } from '../types';
 
 export function Editor() {
   const { id } = useParams<{ id: string }>();
@@ -19,7 +21,9 @@ export function Editor() {
     settings,
     setDiagram,
     setDiagramName,
-    deleteSelectedShapes,
+    addShape,
+    viewPosition,
+    zoom,
   } = useDiagramStore();
 
   // Load diagram
@@ -87,19 +91,32 @@ export function Editor() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Keyboard shortcuts
+  // Handle drag and drop from sidebar
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (document.activeElement?.tagName !== 'INPUT') {
-          deleteSelectedShapes();
-        }
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      const shapeType = e.dataTransfer?.getData('shapeType');
+      if (shapeType && isK8sShape(shapeType as any)) {
+        const x = (e.clientX - viewPosition.x) / zoom;
+        const y = (e.clientY - viewPosition.y) / zoom;
+        addShape(shapeType as K8sShapeType, x - 40, y - 40);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [deleteSelectedShapes]);
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    window.addEventListener('drop', handleDrop);
+    window.addEventListener('dragover', handleDragOver);
+    return () => {
+      window.removeEventListener('drop', handleDrop);
+      window.removeEventListener('dragover', handleDragOver);
+    };
+  }, [addShape, viewPosition, zoom]);
 
   const handleNameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -177,6 +194,7 @@ export function Editor() {
       </div>
 
       <Toolbar />
+      <K8sSidebar />
       <Canvas width={dimensions.width} height={dimensions.height} />
     </div>
   );

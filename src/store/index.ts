@@ -1,5 +1,18 @@
 import { create } from 'zustand';
-import { Shape, Connector, DiagramSettings, Tool, DEFAULT_SETTINGS, DEFAULT_SHAPE_STYLE } from '../types';
+import {
+  Shape,
+  Connector,
+  DiagramSettings,
+  Tool,
+  AnchorPosition,
+  ConnectionState,
+  DEFAULT_SETTINGS,
+  DEFAULT_SHAPE_STYLE,
+  DEFAULT_CONNECTOR_STYLE,
+  isK8sShape,
+  getK8sShapeMeta,
+  K8sShapeType,
+} from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
 interface DiagramState {
@@ -12,17 +25,22 @@ interface DiagramState {
 
   // UI state
   selectedShapeIds: string[];
+  selectedConnectorIds: string[];
   activeTool: Tool;
   isPanning: boolean;
   viewPosition: { x: number; y: number };
   zoom: number;
+  hoveredShapeId: string | null;
+
+  // Connection state
+  connectionState: ConnectionState;
 
   // Actions
   setDiagram: (id: string, name: string, shapes: Shape[], connectors: Connector[], settings: DiagramSettings) => void;
   setDiagramName: (name: string) => void;
 
   // Shape actions
-  addShape: (type: Shape['type'], x: number, y: number) => Shape;
+  addShape: (type: Shape['type'], x: number, y: number, label?: string) => Shape;
   updateShape: (id: string, updates: Partial<Shape>) => void;
   deleteShape: (id: string) => void;
   deleteSelectedShapes: () => void;
@@ -31,10 +49,25 @@ interface DiagramState {
   selectShape: (id: string, addToSelection?: boolean) => void;
   selectShapes: (ids: string[]) => void;
   clearSelection: () => void;
+  setHoveredShape: (id: string | null) => void;
 
   // Connector actions
-  addConnector: (fromId: string, toId: string, fromAnchor: Connector['fromAnchor'], toAnchor: Connector['toAnchor']) => Connector;
+  addConnector: (
+    fromId: string,
+    toId: string,
+    fromAnchor: AnchorPosition,
+    toAnchor: AnchorPosition
+  ) => Connector;
+  updateConnector: (id: string, updates: Partial<Connector>) => void;
   deleteConnector: (id: string) => void;
+  selectConnector: (id: string, addToSelection?: boolean) => void;
+  deleteSelectedConnectors: () => void;
+
+  // Connection drawing
+  startConnection: (shapeId: string, anchor: AnchorPosition, x: number, y: number) => void;
+  updateConnection: (x: number, y: number) => void;
+  endConnection: (shapeId: string, anchor: AnchorPosition) => void;
+  cancelConnection: () => void;
 
   // Tool & View
   setTool: (tool: Tool) => void;
@@ -47,7 +80,17 @@ interface DiagramState {
 
   // Utility
   snapToGrid: (x: number, y: number) => { x: number; y: number };
+  getShapeById: (id: string) => Shape | undefined;
+  getConnectorById: (id: string) => Connector | undefined;
 }
+
+const initialConnectionState: ConnectionState = {
+  isConnecting: false,
+  fromShapeId: null,
+  fromAnchor: null,
+  currentX: 0,
+  currentY: 0,
+};
 
 export const useDiagramStore = create<DiagramState>((set, get) => ({
   diagramId: null,
@@ -56,10 +99,13 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   connectors: [],
   settings: DEFAULT_SETTINGS,
   selectedShapeIds: [],
+  selectedConnectorIds: [],
   activeTool: 'select',
   isPanning: false,
   viewPosition: { x: 0, y: 0 },
   zoom: 1,
+  hoveredShapeId: null,
+  connectionState: initialConnectionState,
 
   setDiagram: (id, name, shapes, connectors, settings) => {
     set({
@@ -69,24 +115,48 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       connectors,
       settings,
       selectedShapeIds: [],
+      selectedConnectorIds: [],
+      connectionState: initialConnectionState,
     });
   },
 
   setDiagramName: (name) => set({ diagramName: name }),
 
-  addShape: (type, x, y) => {
+  addShape: (type, x, y, label) => {
     const state = get();
     const pos = state.snapToGrid(x, y);
+
+    // Get dimensions based on shape type
+    let width = 100;
+    let height = 100;
+    let fill = DEFAULT_SHAPE_STYLE.fill;
+    let stroke = DEFAULT_SHAPE_STYLE.stroke;
+
+    if (type === 'text') {
+      height = 40;
+    } else if (isK8sShape(type)) {
+      const meta = getK8sShapeMeta(type as K8sShapeType);
+      if (meta) {
+        width = meta.defaultWidth;
+        height = meta.defaultHeight;
+        fill = meta.color;
+        stroke = '#1e40af';
+      }
+    }
+
     const shape: Shape = {
       id: uuidv4(),
       type,
       x: pos.x,
       y: pos.y,
-      width: 100,
-      height: type === 'text' ? 40 : 100,
+      width,
+      height,
       rotation: 0,
-      ...DEFAULT_SHAPE_STYLE,
+      fill,
+      stroke,
+      strokeWidth: DEFAULT_SHAPE_STYLE.strokeWidth,
       text: type === 'text' ? 'Text' : undefined,
+      label: label || (isK8sShape(type) ? getK8sShapeMeta(type as K8sShapeType)?.label : undefined),
     };
     set({ shapes: [...state.shapes, shape] });
     return shape;
@@ -130,34 +200,133 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
           ? state.selectedShapeIds.filter((sid) => sid !== id)
           : [...state.selectedShapeIds, id]
         : [id],
+      selectedConnectorIds: addToSelection ? state.selectedConnectorIds : [],
     }));
   },
 
-  selectShapes: (ids) => set({ selectedShapeIds: ids }),
+  selectShapes: (ids) => set({ selectedShapeIds: ids, selectedConnectorIds: [] }),
 
-  clearSelection: () => set({ selectedShapeIds: [] }),
+  clearSelection: () => set({ selectedShapeIds: [], selectedConnectorIds: [] }),
+
+  setHoveredShape: (id) => set({ hoveredShapeId: id }),
 
   addConnector: (fromId, toId, fromAnchor, toAnchor) => {
+    // Don't allow connecting shape to itself
+    if (fromId === toId) {
+      throw new Error('Cannot connect shape to itself');
+    }
+
+    // Check if connector already exists
+    const existingConnector = get().connectors.find(
+      (c) =>
+        (c.fromShapeId === fromId && c.toShapeId === toId) ||
+        (c.fromShapeId === toId && c.toShapeId === fromId)
+    );
+    if (existingConnector) {
+      throw new Error('Connection already exists');
+    }
+
     const connector: Connector = {
       id: uuidv4(),
       fromShapeId: fromId,
       toShapeId: toId,
       fromAnchor,
       toAnchor,
-      stroke: '#6b7280',
-      strokeWidth: 2,
+      ...DEFAULT_CONNECTOR_STYLE,
     };
     set((state) => ({ connectors: [...state.connectors, connector] }));
     return connector;
   },
 
-  deleteConnector: (id) => {
+  updateConnector: (id, updates) => {
     set((state) => ({
-      connectors: state.connectors.filter((c) => c.id !== id),
+      connectors: state.connectors.map((c) =>
+        c.id === id ? { ...c, ...updates } : c
+      ),
     }));
   },
 
-  setTool: (tool) => set({ activeTool: tool }),
+  deleteConnector: (id) => {
+    set((state) => ({
+      connectors: state.connectors.filter((c) => c.id !== id),
+      selectedConnectorIds: state.selectedConnectorIds.filter((cid) => cid !== id),
+    }));
+  },
+
+  selectConnector: (id, addToSelection = false) => {
+    set((state) => ({
+      selectedConnectorIds: addToSelection
+        ? state.selectedConnectorIds.includes(id)
+          ? state.selectedConnectorIds.filter((cid) => cid !== id)
+          : [...state.selectedConnectorIds, id]
+        : [id],
+      selectedShapeIds: addToSelection ? state.selectedShapeIds : [],
+    }));
+  },
+
+  deleteSelectedConnectors: () => {
+    const { selectedConnectorIds } = get();
+    set((state) => ({
+      connectors: state.connectors.filter((c) => !selectedConnectorIds.includes(c.id)),
+      selectedConnectorIds: [],
+    }));
+  },
+
+  startConnection: (shapeId, anchor, x, y) => {
+    set({
+      connectionState: {
+        isConnecting: true,
+        fromShapeId: shapeId,
+        fromAnchor: anchor,
+        currentX: x,
+        currentY: y,
+      },
+    });
+  },
+
+  updateConnection: (x, y) => {
+    set((state) => ({
+      connectionState: {
+        ...state.connectionState,
+        currentX: x,
+        currentY: y,
+      },
+    }));
+  },
+
+  endConnection: (shapeId, anchor) => {
+    const { connectionState, addConnector } = get();
+    if (
+      connectionState.isConnecting &&
+      connectionState.fromShapeId &&
+      connectionState.fromAnchor &&
+      connectionState.fromShapeId !== shapeId
+    ) {
+      try {
+        addConnector(
+          connectionState.fromShapeId,
+          shapeId,
+          connectionState.fromAnchor,
+          anchor
+        );
+      } catch (e) {
+        // Ignore duplicate connections
+        console.warn('Connection failed:', e);
+      }
+    }
+    set({ connectionState: initialConnectionState });
+  },
+
+  cancelConnection: () => {
+    set({ connectionState: initialConnectionState });
+  },
+
+  setTool: (tool) => {
+    set({
+      activeTool: tool,
+      connectionState: initialConnectionState,
+    });
+  },
 
   setViewPosition: (x, y) => set({ viewPosition: { x, y } }),
 
@@ -179,5 +348,13 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       x: Math.round(x / gridSize) * gridSize,
       y: Math.round(y / gridSize) * gridSize,
     };
+  },
+
+  getShapeById: (id) => {
+    return get().shapes.find((s) => s.id === id);
+  },
+
+  getConnectorById: (id) => {
+    return get().connectors.find((c) => c.id === id);
   },
 }));

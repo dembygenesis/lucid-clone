@@ -1,14 +1,27 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { Stage, Layer, Rect, Circle, Line, Text, Transformer, Group } from 'react-konva';
+import { Stage, Layer, Rect, Circle, Line, Text, Transformer, Group, Arrow, Path } from 'react-konva';
 import { KonvaEventObject } from 'konva/lib/Node';
 import Konva from 'konva';
 import { useDiagramStore } from '../store';
-import { Shape } from '../types';
+import {
+  Shape,
+  Connector,
+  AnchorPosition,
+  getShapeAnchors,
+  getAnchorPoint,
+  findNearestAnchor,
+  isK8sShape,
+  K8sShapeType,
+} from '../types';
+import { getK8sIconPath, K8S_LABELS } from './K8sIcons';
 
 interface CanvasProps {
   width: number;
   height: number;
 }
+
+const ANCHOR_RADIUS = 6;
+const ANCHOR_HIT_RADIUS = 12;
 
 export function Canvas({ width, height }: CanvasProps) {
   const stageRef = useRef<Konva.Stage>(null);
@@ -19,18 +32,29 @@ export function Canvas({ width, height }: CanvasProps) {
     connectors,
     settings,
     selectedShapeIds,
+    selectedConnectorIds,
     activeTool,
     viewPosition,
     zoom,
     isPanning,
+    hoveredShapeId,
+    connectionState,
     addShape,
     updateShape,
     selectShape,
+    selectConnector,
     clearSelection,
     setViewPosition,
     setZoom,
     setPanning,
     setTool,
+    setHoveredShape,
+    startConnection,
+    updateConnection,
+    endConnection,
+    cancelConnection,
+    deleteSelectedShapes,
+    deleteSelectedConnectors,
   } = useDiagramStore();
 
   // Update transformer when selection changes
@@ -38,32 +62,73 @@ export function Canvas({ width, height }: CanvasProps) {
     if (!transformerRef.current || !stageRef.current) return;
 
     const nodes = selectedShapeIds
-      .map((id) => stageRef.current?.findOne(`#${id}`))
+      .map((id) => stageRef.current?.findOne(`#shape-${id}`))
       .filter(Boolean) as Konva.Node[];
 
     transformerRef.current.nodes(nodes);
     transformerRef.current.getLayer()?.batchDraw();
   }, [selectedShapeIds, shapes]);
 
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (connectionState.isConnecting) {
+          cancelConnection();
+        } else {
+          clearSelection();
+        }
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (document.activeElement?.tagName !== 'INPUT') {
+          e.preventDefault();
+          deleteSelectedShapes();
+          deleteSelectedConnectors();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors]);
+
+  const getPointerPosition = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage) return { x: 0, y: 0 };
+    const pos = stage.getPointerPosition();
+    if (!pos) return { x: 0, y: 0 };
+    return {
+      x: (pos.x - viewPosition.x) / zoom,
+      y: (pos.y - viewPosition.y) / zoom,
+    };
+  }, [viewPosition, zoom]);
+
   const handleStageClick = useCallback(
     (e: KonvaEventObject<MouseEvent>) => {
       // Click on empty area
       if (e.target === e.target.getStage()) {
-        if (activeTool === 'select') {
+        if (connectionState.isConnecting) {
+          cancelConnection();
+        } else if (activeTool === 'select') {
           clearSelection();
-        } else if (['rectangle', 'circle', 'diamond', 'text'].includes(activeTool)) {
-          const stage = e.target.getStage();
-          const pointerPos = stage?.getPointerPosition();
-          if (pointerPos) {
-            const x = (pointerPos.x - viewPosition.x) / zoom;
-            const y = (pointerPos.y - viewPosition.y) / zoom;
-            addShape(activeTool as Shape['type'], x, y);
-            setTool('select');
-          }
+        } else if (activeTool !== 'pan' && activeTool !== 'connector') {
+          const pos = getPointerPosition();
+          addShape(activeTool, pos.x, pos.y);
+          setTool('select');
         }
       }
     },
-    [activeTool, viewPosition, zoom, addShape, clearSelection, setTool]
+    [activeTool, connectionState.isConnecting, addShape, clearSelection, setTool, cancelConnection, getPointerPosition]
+  );
+
+  const handleStageMouseMove = useCallback(
+    (e: KonvaEventObject<MouseEvent>) => {
+      if (connectionState.isConnecting) {
+        const pos = getPointerPosition();
+        updateConnection(pos.x, pos.y);
+      }
+    },
+    [connectionState.isConnecting, updateConnection, getPointerPosition]
   );
 
   const handleWheel = useCallback(
@@ -95,38 +160,78 @@ export function Canvas({ width, height }: CanvasProps) {
     [zoom, viewPosition, setZoom, setViewPosition]
   );
 
-  const handleDragStart = useCallback(() => {
-    if (activeTool === 'pan') {
-      setPanning(true);
-    }
-  }, [activeTool, setPanning]);
-
-  const handleDragEnd = useCallback(() => {
-    setPanning(false);
-  }, [setPanning]);
-
   const handleStageDrag = useCallback(
     (e: KonvaEventObject<DragEvent>) => {
-      if (activeTool === 'pan' || e.evt.buttons === 4) {
+      if (activeTool === 'pan') {
         setViewPosition(e.target.x(), e.target.y());
       }
     },
     [activeTool, setViewPosition]
   );
 
+  const handleAnchorClick = useCallback(
+    (shapeId: string, anchor: AnchorPosition, x: number, y: number) => {
+      if (connectionState.isConnecting) {
+        endConnection(shapeId, anchor);
+      } else if (activeTool === 'connector' || activeTool === 'select') {
+        startConnection(shapeId, anchor, x, y);
+      }
+    },
+    [connectionState.isConnecting, activeTool, startConnection, endConnection]
+  );
+
+  const renderAnchors = (shape: Shape) => {
+    const showAnchors =
+      activeTool === 'connector' ||
+      selectedShapeIds.includes(shape.id) ||
+      hoveredShapeId === shape.id ||
+      connectionState.isConnecting;
+
+    if (!showAnchors) return null;
+
+    const anchors = getShapeAnchors(shape);
+
+    return anchors.map((anchor) => (
+      <Circle
+        key={`anchor-${shape.id}-${anchor.position}`}
+        x={anchor.x}
+        y={anchor.y}
+        radius={ANCHOR_RADIUS}
+        fill={connectionState.isConnecting ? '#22c55e' : '#3b82f6'}
+        stroke="#fff"
+        strokeWidth={2}
+        hitStrokeWidth={ANCHOR_HIT_RADIUS}
+        onMouseDown={(e) => {
+          e.cancelBubble = true;
+          handleAnchorClick(shape.id, anchor.position, anchor.x, anchor.y);
+        }}
+        onMouseUp={(e) => {
+          e.cancelBubble = true;
+          if (connectionState.isConnecting && connectionState.fromShapeId !== shape.id) {
+            endConnection(shape.id, anchor.position);
+          }
+        }}
+        style={{ cursor: 'crosshair' }}
+      />
+    ));
+  };
+
   const renderShape = (shape: Shape) => {
     const isSelected = selectedShapeIds.includes(shape.id);
 
     const commonProps = {
-      id: shape.id,
+      id: `shape-${shape.id}`,
       x: shape.x,
       y: shape.y,
       rotation: shape.rotation,
-      draggable: activeTool === 'select',
+      draggable: activeTool === 'select' && !connectionState.isConnecting,
       onClick: (e: KonvaEventObject<MouseEvent>) => {
+        if (connectionState.isConnecting) return;
         e.cancelBubble = true;
         selectShape(shape.id, e.evt.shiftKey);
       },
+      onMouseEnter: () => setHoveredShape(shape.id),
+      onMouseLeave: () => setHoveredShape(null),
       onDragEnd: (e: KonvaEventObject<DragEvent>) => {
         const { snapToGrid } = useDiagramStore.getState();
         const snapped = snapToGrid(e.target.x(), e.target.y());
@@ -146,34 +251,85 @@ export function Canvas({ width, height }: CanvasProps) {
       },
     };
 
+    // Render K8s shapes
+    if (isK8sShape(shape.type)) {
+      const iconPath = getK8sIconPath(shape.type as K8sShapeType);
+      const label = shape.label || K8S_LABELS[shape.type as K8sShapeType];
+
+      return (
+        <Group key={shape.id} {...commonProps}>
+          {/* Background */}
+          <Rect
+            width={shape.width}
+            height={shape.height}
+            fill="#fff"
+            stroke={isSelected ? '#3b82f6' : shape.stroke}
+            strokeWidth={isSelected ? 3 : shape.strokeWidth}
+            cornerRadius={8}
+            shadowColor="rgba(0,0,0,0.1)"
+            shadowBlur={8}
+            shadowOffset={{ x: 0, y: 2 }}
+          />
+          {/* Icon */}
+          <Path
+            data={iconPath}
+            fill={shape.fill}
+            x={shape.width / 2 - 24}
+            y={10}
+            scaleX={1}
+            scaleY={1}
+          />
+          {/* Label */}
+          <Text
+            text={label}
+            x={0}
+            y={shape.height - 20}
+            width={shape.width}
+            height={20}
+            fontSize={11}
+            fontStyle="bold"
+            fill="#374151"
+            align="center"
+            verticalAlign="middle"
+          />
+          {renderAnchors(shape)}
+        </Group>
+      );
+    }
+
+    // Render basic shapes
     switch (shape.type) {
       case 'rectangle':
         return (
-          <Rect
-            key={shape.id}
-            {...commonProps}
-            width={shape.width}
-            height={shape.height}
-            fill={shape.fill}
-            stroke={shape.stroke}
-            strokeWidth={shape.strokeWidth}
-            cornerRadius={4}
-          />
+          <Group key={shape.id}>
+            <Rect
+              {...commonProps}
+              width={shape.width}
+              height={shape.height}
+              fill={shape.fill}
+              stroke={isSelected ? '#3b82f6' : shape.stroke}
+              strokeWidth={isSelected ? 3 : shape.strokeWidth}
+              cornerRadius={4}
+            />
+            {renderAnchors(shape)}
+          </Group>
         );
 
       case 'circle':
         return (
-          <Circle
-            key={shape.id}
-            {...commonProps}
-            x={shape.x + shape.width / 2}
-            y={shape.y + shape.height / 2}
-            radiusX={shape.width / 2}
-            radiusY={shape.height / 2}
-            fill={shape.fill}
-            stroke={shape.stroke}
-            strokeWidth={shape.strokeWidth}
-          />
+          <Group key={shape.id}>
+            <Circle
+              {...commonProps}
+              x={shape.x + shape.width / 2}
+              y={shape.y + shape.height / 2}
+              radiusX={shape.width / 2}
+              radiusY={shape.height / 2}
+              fill={shape.fill}
+              stroke={isSelected ? '#3b82f6' : shape.stroke}
+              strokeWidth={isSelected ? 3 : shape.strokeWidth}
+            />
+            {renderAnchors(shape)}
+          </Group>
         );
 
       case 'diamond':
@@ -184,30 +340,34 @@ export function Canvas({ width, height }: CanvasProps) {
           0, shape.height / 2,
         ];
         return (
-          <Line
-            key={shape.id}
-            {...commonProps}
-            points={points}
-            closed
-            fill={shape.fill}
-            stroke={shape.stroke}
-            strokeWidth={shape.strokeWidth}
-          />
+          <Group key={shape.id}>
+            <Line
+              {...commonProps}
+              points={points}
+              closed
+              fill={shape.fill}
+              stroke={isSelected ? '#3b82f6' : shape.stroke}
+              strokeWidth={isSelected ? 3 : shape.strokeWidth}
+            />
+            {renderAnchors(shape)}
+          </Group>
         );
 
       case 'text':
         return (
-          <Text
-            key={shape.id}
-            {...commonProps}
-            text={shape.text || 'Text'}
-            fontSize={16}
-            fill={shape.fill}
-            width={shape.width}
-            height={shape.height}
-            align="center"
-            verticalAlign="middle"
-          />
+          <Group key={shape.id}>
+            <Text
+              {...commonProps}
+              text={shape.text || 'Text'}
+              fontSize={16}
+              fill={shape.fill}
+              width={shape.width}
+              height={shape.height}
+              align="center"
+              verticalAlign="middle"
+            />
+            {renderAnchors(shape)}
+          </Group>
         );
 
       default:
@@ -215,38 +375,69 @@ export function Canvas({ width, height }: CanvasProps) {
     }
   };
 
-  const renderConnector = (connector: typeof connectors[0]) => {
+  const renderConnector = (connector: Connector) => {
     const fromShape = shapes.find((s) => s.id === connector.fromShapeId);
     const toShape = shapes.find((s) => s.id === connector.toShapeId);
 
     if (!fromShape || !toShape) return null;
 
-    const getAnchorPoint = (shape: Shape, anchor: string) => {
-      switch (anchor) {
-        case 'top':
-          return { x: shape.x + shape.width / 2, y: shape.y };
-        case 'bottom':
-          return { x: shape.x + shape.width / 2, y: shape.y + shape.height };
-        case 'left':
-          return { x: shape.x, y: shape.y + shape.height / 2 };
-        case 'right':
-          return { x: shape.x + shape.width, y: shape.y + shape.height / 2 };
-        default:
-          return { x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 };
-      }
-    };
-
     const from = getAnchorPoint(fromShape, connector.fromAnchor);
     const to = getAnchorPoint(toShape, connector.toAnchor);
+    const isSelected = selectedConnectorIds.includes(connector.id);
+
+    let points: number[] = [];
+
+    if (connector.style === 'elbow') {
+      // Calculate elbow points
+      const midX = (from.x + to.x) / 2;
+      const midY = (from.y + to.y) / 2;
+
+      if (connector.fromAnchor === 'left' || connector.fromAnchor === 'right') {
+        points = [from.x, from.y, midX, from.y, midX, to.y, to.x, to.y];
+      } else {
+        points = [from.x, from.y, from.x, midY, to.x, midY, to.x, to.y];
+      }
+    } else {
+      points = [from.x, from.y, to.x, to.y];
+    }
+
+    return (
+      <Arrow
+        key={connector.id}
+        points={points}
+        stroke={isSelected ? '#3b82f6' : connector.stroke}
+        strokeWidth={isSelected ? 3 : connector.strokeWidth}
+        lineCap="round"
+        lineJoin="round"
+        pointerLength={connector.endArrow === 'arrow' ? 10 : 0}
+        pointerWidth={connector.endArrow === 'arrow' ? 10 : 0}
+        pointerAtBeginning={connector.startArrow === 'arrow'}
+        onClick={(e) => {
+          e.cancelBubble = true;
+          selectConnector(connector.id, e.evt.shiftKey);
+        }}
+        hitStrokeWidth={10}
+      />
+    );
+  };
+
+  const renderConnectionLine = () => {
+    if (!connectionState.isConnecting || !connectionState.fromShapeId || !connectionState.fromAnchor) {
+      return null;
+    }
+
+    const fromShape = shapes.find((s) => s.id === connectionState.fromShapeId);
+    if (!fromShape) return null;
+
+    const from = getAnchorPoint(fromShape, connectionState.fromAnchor);
 
     return (
       <Line
-        key={connector.id}
-        points={[from.x, from.y, to.x, to.y]}
-        stroke={connector.stroke}
-        strokeWidth={connector.strokeWidth}
+        points={[from.x, from.y, connectionState.currentX, connectionState.currentY]}
+        stroke="#3b82f6"
+        strokeWidth={2}
+        dash={[5, 5]}
         lineCap="round"
-        lineJoin="round"
       />
     );
   };
@@ -297,18 +488,28 @@ export function Canvas({ width, height }: CanvasProps) {
       y={viewPosition.y}
       draggable={activeTool === 'pan'}
       onClick={handleStageClick}
+      onMouseMove={handleStageMouseMove}
       onWheel={handleWheel}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
+      onDragStart={() => activeTool === 'pan' && setPanning(true)}
+      onDragEnd={() => setPanning(false)}
       onDragMove={handleStageDrag}
       style={{
         backgroundColor: settings.backgroundColor,
-        cursor: activeTool === 'pan' ? (isPanning ? 'grabbing' : 'grab') : 'default',
+        cursor: connectionState.isConnecting
+          ? 'crosshair'
+          : activeTool === 'pan'
+          ? isPanning
+            ? 'grabbing'
+            : 'grab'
+          : activeTool === 'connector'
+          ? 'crosshair'
+          : 'default',
       }}
     >
       <Layer>
         {renderGrid()}
         {connectors.map(renderConnector)}
+        {renderConnectionLine()}
         {shapes.map(renderShape)}
         <Transformer
           ref={transformerRef}

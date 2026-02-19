@@ -1,18 +1,43 @@
 import { useDiagramStore } from '../store';
 import { Tool } from '../types';
 
-const tools: { id: Tool; label: string; icon: string }[] = [
-  { id: 'select', label: 'Select', icon: '↖' },
-  { id: 'pan', label: 'Pan', icon: '✋' },
-  { id: 'rectangle', label: 'Rectangle', icon: '▢' },
-  { id: 'circle', label: 'Circle', icon: '○' },
-  { id: 'diamond', label: 'Diamond', icon: '◇' },
-  { id: 'text', label: 'Text', icon: 'T' },
+interface ToolConfig {
+  id: Tool;
+  label: string;
+  icon: string;
+  group: 'navigation' | 'shapes' | 'connector';
+}
+
+const tools: ToolConfig[] = [
+  { id: 'select', label: 'Select (V)', icon: '↖', group: 'navigation' },
+  { id: 'pan', label: 'Pan (H)', icon: '✋', group: 'navigation' },
+  { id: 'connector', label: 'Connector (C)', icon: '↗', group: 'connector' },
+  { id: 'rectangle', label: 'Rectangle (R)', icon: '▢', group: 'shapes' },
+  { id: 'circle', label: 'Circle (O)', icon: '○', group: 'shapes' },
+  { id: 'diamond', label: 'Diamond (D)', icon: '◇', group: 'shapes' },
+  { id: 'text', label: 'Text (T)', icon: 'T', group: 'shapes' },
 ];
 
 export function Toolbar() {
-  const { activeTool, setTool, zoom, setZoom, deleteSelectedShapes, selectedShapeIds } =
-    useDiagramStore();
+  const {
+    activeTool,
+    setTool,
+    zoom,
+    setZoom,
+    deleteSelectedShapes,
+    deleteSelectedConnectors,
+    selectedShapeIds,
+    selectedConnectorIds,
+    connectionState,
+    cancelConnection,
+  } = useDiagramStore();
+
+  const hasSelection = selectedShapeIds.length > 0 || selectedConnectorIds.length > 0;
+
+  const handleDelete = () => {
+    deleteSelectedShapes();
+    deleteSelectedConnectors();
+  };
 
   return (
     <div
@@ -30,42 +55,65 @@ export function Toolbar() {
         zIndex: 100,
       }}
     >
-      {tools.map((tool) => (
-        <button
-          key={tool.id}
-          onClick={() => setTool(tool.id)}
-          title={tool.label}
-          style={{
-            width: 40,
-            height: 40,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 20,
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            backgroundColor: activeTool === tool.id ? '#4f46e5' : '#f3f4f6',
-            color: activeTool === tool.id ? 'white' : '#374151',
-            transition: 'all 0.15s ease',
-          }}
-        >
-          {tool.icon}
-        </button>
-      ))}
+      {/* Navigation tools */}
+      {tools
+        .filter((t) => t.group === 'navigation')
+        .map((tool) => (
+          <ToolButton
+            key={tool.id}
+            tool={tool}
+            isActive={activeTool === tool.id}
+            onClick={() => setTool(tool.id)}
+          />
+        ))}
 
-      <div style={{ width: 1, backgroundColor: '#e5e7eb', margin: '0 4px' }} />
+      <Divider />
 
+      {/* Connector tool */}
+      {tools
+        .filter((t) => t.group === 'connector')
+        .map((tool) => (
+          <ToolButton
+            key={tool.id}
+            tool={tool}
+            isActive={activeTool === tool.id || connectionState.isConnecting}
+            onClick={() => {
+              if (connectionState.isConnecting) {
+                cancelConnection();
+              }
+              setTool(tool.id);
+            }}
+            highlight={connectionState.isConnecting}
+          />
+        ))}
+
+      <Divider />
+
+      {/* Shape tools */}
+      {tools
+        .filter((t) => t.group === 'shapes')
+        .map((tool) => (
+          <ToolButton
+            key={tool.id}
+            tool={tool}
+            isActive={activeTool === tool.id}
+            onClick={() => setTool(tool.id)}
+          />
+        ))}
+
+      <Divider />
+
+      {/* Zoom controls */}
       <button
         onClick={() => setZoom(zoom - 0.1)}
-        title="Zoom Out"
+        title="Zoom Out (-)"
         style={{
-          width: 40,
-          height: 40,
+          width: 36,
+          height: 36,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: 20,
+          fontSize: 18,
           border: 'none',
           borderRadius: 6,
           cursor: 'pointer',
@@ -78,12 +126,12 @@ export function Toolbar() {
 
       <div
         style={{
-          width: 60,
-          height: 40,
+          width: 50,
+          height: 36,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: 14,
+          fontSize: 13,
           fontWeight: 500,
           color: '#374151',
         }}
@@ -93,14 +141,14 @@ export function Toolbar() {
 
       <button
         onClick={() => setZoom(zoom + 0.1)}
-        title="Zoom In"
+        title="Zoom In (+)"
         style={{
-          width: 40,
-          height: 40,
+          width: 36,
+          height: 36,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          fontSize: 20,
+          fontSize: 18,
           border: 'none',
           borderRadius: 6,
           cursor: 'pointer',
@@ -111,19 +159,20 @@ export function Toolbar() {
         +
       </button>
 
-      {selectedShapeIds.length > 0 && (
+      {/* Delete button */}
+      {hasSelection && (
         <>
-          <div style={{ width: 1, backgroundColor: '#e5e7eb', margin: '0 4px' }} />
+          <Divider />
           <button
-            onClick={deleteSelectedShapes}
-            title="Delete Selected"
+            onClick={handleDelete}
+            title="Delete Selected (Del)"
             style={{
-              width: 40,
-              height: 40,
+              width: 36,
+              height: 36,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 18,
+              fontSize: 16,
               border: 'none',
               borderRadius: 6,
               cursor: 'pointer',
@@ -135,6 +184,84 @@ export function Toolbar() {
           </button>
         </>
       )}
+
+      {/* Connection indicator */}
+      {connectionState.isConnecting && (
+        <>
+          <Divider />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '0 8px',
+              fontSize: 13,
+              color: '#059669',
+              fontWeight: 500,
+            }}
+          >
+            <span style={{ fontSize: 10 }}>●</span>
+            Drawing connection...
+            <button
+              onClick={cancelConnection}
+              style={{
+                padding: '4px 8px',
+                fontSize: 12,
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                backgroundColor: '#f3f4f6',
+                color: '#6b7280',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
+}
+
+function ToolButton({
+  tool,
+  isActive,
+  onClick,
+  highlight,
+}: {
+  tool: ToolConfig;
+  isActive: boolean;
+  onClick: () => void;
+  highlight?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={tool.label}
+      style={{
+        width: 36,
+        height: 36,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 18,
+        border: 'none',
+        borderRadius: 6,
+        cursor: 'pointer',
+        backgroundColor: highlight
+          ? '#dcfce7'
+          : isActive
+          ? '#4f46e5'
+          : '#f3f4f6',
+        color: highlight ? '#059669' : isActive ? 'white' : '#374151',
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {tool.icon}
+    </button>
+  );
+}
+
+function Divider() {
+  return <div style={{ width: 1, backgroundColor: '#e5e7eb', margin: '0 4px' }} />;
 }
