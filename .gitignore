@@ -26,3 +26,4 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+e2e/screenshots/
