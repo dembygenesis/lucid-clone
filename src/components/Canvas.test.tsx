@@ -879,3 +879,230 @@ describe('Shape interchangeability', () => {
     expect(state.shapes.find(s => s.id === pod.id)?.label).toBe('My Pod');
   });
 });
+
+describe('Quick-create connected shape', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      connectionState: {
+        isConnecting: false,
+        fromShapeId: null,
+        fromAnchor: null,
+        currentX: 0,
+        currentY: 0,
+      },
+      history: [],
+      historyIndex: -1,
+    });
+  });
+
+  it('should create new shape to the right when clicking right anchor', () => {
+    const store = useDiagramStore.getState();
+    const sourceShape = store.addShape('rectangle', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(sourceShape.id, 'right');
+
+    expect(newShape).not.toBeNull();
+    expect(newShape!.type).toBe('rectangle');
+    // New shape should be to the right (x = source.x + source.width + OFFSET)
+    expect(newShape!.x).toBeGreaterThan(sourceShape.x + sourceShape.width);
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes).toHaveLength(2);
+    expect(state.connectors).toHaveLength(1);
+    expect(state.connectors[0].fromAnchor).toBe('right');
+    expect(state.connectors[0].toAnchor).toBe('left');
+  });
+
+  it('should create new shape to the left when clicking left anchor', () => {
+    const store = useDiagramStore.getState();
+    const sourceShape = store.addShape('rectangle', 300, 100);
+
+    const newShape = store.quickCreateConnectedShape(sourceShape.id, 'left');
+
+    expect(newShape).not.toBeNull();
+    // New shape should be to the left
+    expect(newShape!.x).toBeLessThan(sourceShape.x);
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors[0].fromAnchor).toBe('left');
+    expect(state.connectors[0].toAnchor).toBe('right');
+  });
+
+  it('should create new shape above when clicking top anchor', () => {
+    const store = useDiagramStore.getState();
+    const sourceShape = store.addShape('rectangle', 100, 300);
+
+    const newShape = store.quickCreateConnectedShape(sourceShape.id, 'top');
+
+    expect(newShape).not.toBeNull();
+    // New shape should be above
+    expect(newShape!.y).toBeLessThan(sourceShape.y);
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors[0].fromAnchor).toBe('top');
+    expect(state.connectors[0].toAnchor).toBe('bottom');
+  });
+
+  it('should create new shape below when clicking bottom anchor', () => {
+    const store = useDiagramStore.getState();
+    const sourceShape = store.addShape('rectangle', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(sourceShape.id, 'bottom');
+
+    expect(newShape).not.toBeNull();
+    // New shape should be below
+    expect(newShape!.y).toBeGreaterThan(sourceShape.y + sourceShape.height);
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors[0].fromAnchor).toBe('bottom');
+    expect(state.connectors[0].toAnchor).toBe('top');
+  });
+
+  it('should preserve shape type when quick-creating', () => {
+    const store = useDiagramStore.getState();
+    const circle = store.addShape('circle', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(circle.id, 'right');
+
+    expect(newShape).not.toBeNull();
+    expect(newShape!.type).toBe('circle');
+  });
+
+  it('should preserve K8s shape type when quick-creating', () => {
+    const store = useDiagramStore.getState();
+    const pod = store.addShape('k8s-pod', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(pod.id, 'right');
+
+    expect(newShape).not.toBeNull();
+    expect(newShape!.type).toBe('k8s-pod');
+  });
+
+  it('should select the new shape after creation', () => {
+    const store = useDiagramStore.getState();
+    const sourceShape = store.addShape('rectangle', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(sourceShape.id, 'right');
+
+    const state = useDiagramStore.getState();
+    expect(state.selectedShapeIds).toContain(newShape!.id);
+  });
+
+  it('should return null for invalid source shape', () => {
+    const store = useDiagramStore.getState();
+
+    const newShape = store.quickCreateConnectedShape('non-existent-id', 'right');
+
+    expect(newShape).toBeNull();
+    expect(useDiagramStore.getState().shapes).toHaveLength(0);
+  });
+
+  it('should create chain of connected shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+
+    const shape2 = store.quickCreateConnectedShape(shape1.id, 'right');
+    const shape3 = store.quickCreateConnectedShape(shape2!.id, 'right');
+    const shape4 = store.quickCreateConnectedShape(shape3!.id, 'bottom');
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes).toHaveLength(4);
+    expect(state.connectors).toHaveLength(3);
+
+    // Verify positions make sense (each shape to the right/below of previous)
+    expect(shape2!.x).toBeGreaterThan(shape1.x);
+    expect(shape3!.x).toBeGreaterThan(shape2!.x);
+    expect(shape4!.y).toBeGreaterThan(shape3!.y);
+  });
+
+  it('should work with diamond shapes', () => {
+    const store = useDiagramStore.getState();
+    const diamond = store.addShape('diamond', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(diamond.id, 'right');
+
+    expect(newShape).not.toBeNull();
+    expect(newShape!.type).toBe('diamond');
+    expect(useDiagramStore.getState().connectors).toHaveLength(1);
+  });
+
+  it('should create appropriate spacing between shapes', () => {
+    const store = useDiagramStore.getState();
+    const sourceShape = store.addShape('rectangle', 100, 100);
+
+    const newShape = store.quickCreateConnectedShape(sourceShape.id, 'right');
+
+    // There should be a gap between shapes (OFFSET = 150, but grid snapping may adjust)
+    const gap = newShape!.x - (sourceShape.x + sourceShape.width);
+    expect(gap).toBeGreaterThanOrEqual(150);
+    expect(gap).toBeLessThanOrEqual(170); // Allow for grid snapping
+  });
+});
+
+describe('K8s shape resize behavior', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      history: [],
+      historyIndex: -1,
+    });
+  });
+
+  it('should maintain K8s shape properties after resize', () => {
+    const store = useDiagramStore.getState();
+    const pod = store.addShape('k8s-pod', 100, 100);
+
+    // Simulate resize by updating dimensions
+    store.updateShape(pod.id, { width: 120, height: 100 });
+
+    const state = useDiagramStore.getState();
+    const updatedPod = state.shapes.find(s => s.id === pod.id)!;
+
+    expect(updatedPod.type).toBe('k8s-pod');
+    expect(updatedPod.width).toBe(120);
+    expect(updatedPod.height).toBe(100);
+    // Label should be preserved
+    expect(updatedPod.label).toBeDefined();
+  });
+
+  it('should maintain K8s shape type after multiple resizes', () => {
+    const store = useDiagramStore.getState();
+    const service = store.addShape('k8s-service', 100, 100);
+
+    // Multiple resizes
+    store.updateShape(service.id, { width: 150, height: 150 });
+    store.updateShape(service.id, { width: 100, height: 100 });
+    store.updateShape(service.id, { width: 200, height: 80 });
+
+    const state = useDiagramStore.getState();
+    const updatedService = state.shapes.find(s => s.id === service.id)!;
+
+    expect(updatedService.type).toBe('k8s-service');
+    expect(updatedService.width).toBe(200);
+    expect(updatedService.height).toBe(80);
+  });
+
+  it('should preserve connectors when K8s shape is resized', () => {
+    const store = useDiagramStore.getState();
+    const pod = store.addShape('k8s-pod', 100, 100);
+    const service = store.addShape('k8s-service', 300, 100);
+
+    // Create connector
+    store.startConnection(pod.id, 'right', 180, 140);
+    store.endConnection(service.id, 'left');
+
+    // Resize pod
+    store.updateShape(pod.id, { width: 150, height: 120 });
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(1);
+    expect(state.connectors[0].fromShapeId).toBe(pod.id);
+  });
+});

@@ -54,6 +54,7 @@ export function Canvas({ width, height }: CanvasProps) {
     cancelConnection,
     deleteSelectedShapes,
     deleteSelectedConnectors,
+    quickCreateConnectedShape,
   } = useDiagramStore();
 
   // Update transformer when selection changes
@@ -239,12 +240,17 @@ export function Canvas({ width, height }: CanvasProps) {
   const handleAnchorClick = useCallback(
     (shapeId: string, anchor: AnchorPosition, x: number, y: number) => {
       if (connectionState.isConnecting) {
+        // Complete existing connection
         endConnection(shapeId, anchor);
-      } else if (activeTool === 'connector' || activeTool === 'select') {
+      } else if (activeTool === 'connector') {
+        // Connector tool: start drag-to-connect flow
         startConnection(shapeId, anchor, x, y);
+      } else if (activeTool === 'select') {
+        // Select tool: quick-create connected shape (Lucidchart-style)
+        quickCreateConnectedShape(shapeId, anchor);
       }
     },
-    [connectionState.isConnecting, activeTool, startConnection, endConnection]
+    [connectionState.isConnecting, activeTool, startConnection, endConnection, quickCreateConnectedShape]
   );
 
   // Render anchor points for a shape
@@ -325,12 +331,20 @@ export function Canvas({ width, height }: CanvasProps) {
       const scaleX = node.scaleX();
       const scaleY = node.scaleY();
 
-      // Update shape in real-time
+      // Calculate new dimensions
+      const newWidth = Math.max(20, shape.width * scaleX);
+      const newHeight = Math.max(20, shape.height * scaleY);
+
+      // Reset scale immediately to prevent icon/text distortion
+      node.scaleX(1);
+      node.scaleY(1);
+
+      // Update shape in real-time with new dimensions
       updateShape(shape.id, {
         x: node.x(),
         y: node.y(),
-        width: Math.max(20, shape.width * scaleX),
-        height: Math.max(20, shape.height * scaleY),
+        width: newWidth,
+        height: newHeight,
         rotation: node.rotation(),
       });
     };

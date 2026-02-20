@@ -112,6 +112,9 @@ interface DiagramState {
   copy: () => void;
   paste: () => void;
   duplicate: () => void;
+
+  // Quick create connected shape (Lucidchart-style)
+  quickCreateConnectedShape: (sourceShapeId: string, fromAnchor: AnchorPosition) => Shape | null;
 }
 
 const initialConnectionState: ConnectionState = {
@@ -530,5 +533,55 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
 
   getConnectorById: (id) => {
     return get().connectors.find((c) => c.id === id);
+  },
+
+  quickCreateConnectedShape: (sourceShapeId, fromAnchor) => {
+    const { shapes, addShape, addConnector, selectShape } = get();
+    const sourceShape = shapes.find(s => s.id === sourceShapeId);
+
+    if (!sourceShape) return null;
+
+    // Calculate offset based on anchor direction
+    const OFFSET = 150; // Distance between shapes
+    let newX = sourceShape.x;
+    let newY = sourceShape.y;
+    let toAnchor: AnchorPosition;
+
+    switch (fromAnchor) {
+      case 'top':
+        newY = sourceShape.y - sourceShape.height - OFFSET;
+        toAnchor = 'bottom';
+        break;
+      case 'right':
+        newX = sourceShape.x + sourceShape.width + OFFSET;
+        toAnchor = 'left';
+        break;
+      case 'bottom':
+        newY = sourceShape.y + sourceShape.height + OFFSET;
+        toAnchor = 'top';
+        break;
+      case 'left':
+        newX = sourceShape.x - sourceShape.width - OFFSET;
+        toAnchor = 'right';
+        break;
+      default:
+        toAnchor = 'left';
+    }
+
+    // Create new shape of same type
+    const newShape = addShape(sourceShape.type, newX, newY, sourceShape.label);
+
+    // Connect source to new shape
+    try {
+      addConnector(sourceShapeId, newShape.id, fromAnchor, toAnchor);
+    } catch (e) {
+      // Connection might fail if duplicate, but shape is still created
+      console.warn('Quick create connector failed:', e);
+    }
+
+    // Select the new shape
+    selectShape(newShape.id);
+
+    return newShape;
   },
 }));
