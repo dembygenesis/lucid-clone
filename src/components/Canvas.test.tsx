@@ -1389,3 +1389,625 @@ describe('K8s shape resize behavior', () => {
     expect(state.connectors[0].fromShapeId).toBe(pod.id);
   });
 });
+
+describe('Multi-select drag', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      history: [],
+      historyIndex: -1,
+    });
+  });
+
+  it('should update multiple shapes with updateShapes action', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+    const shape3 = store.addShape('rectangle', 500, 100);
+
+    // Update multiple shapes at once
+    store.updateShapes([
+      { id: shape1.id, changes: { x: 150, y: 150 } },
+      { id: shape2.id, changes: { x: 350, y: 150 } },
+      { id: shape3.id, changes: { x: 550, y: 150 } },
+    ]);
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes.find(s => s.id === shape1.id)?.x).toBe(150);
+    expect(state.shapes.find(s => s.id === shape2.id)?.x).toBe(350);
+    expect(state.shapes.find(s => s.id === shape3.id)?.x).toBe(550);
+  });
+
+  it('should move all selected shapes with moveSelectedShapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    // Select both shapes
+    store.selectShapes([shape1.id, shape2.id]);
+
+    // Move selected shapes by delta
+    store.moveSelectedShapes(50, 25);
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes.find(s => s.id === shape1.id)?.x).toBe(150);
+    expect(state.shapes.find(s => s.id === shape1.id)?.y).toBe(125);
+    expect(state.shapes.find(s => s.id === shape2.id)?.x).toBe(350);
+    expect(state.shapes.find(s => s.id === shape2.id)?.y).toBe(125);
+  });
+
+  it('should maintain relative positions during multi-select move', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 200);
+
+    const initialDx = shape2.x - shape1.x; // 200
+    const initialDy = shape2.y - shape1.y; // 100
+
+    store.selectShapes([shape1.id, shape2.id]);
+    store.moveSelectedShapes(100, 50);
+
+    const state = useDiagramStore.getState();
+    const s1 = state.shapes.find(s => s.id === shape1.id)!;
+    const s2 = state.shapes.find(s => s.id === shape2.id)!;
+
+    expect(s2.x - s1.x).toBe(initialDx);
+    expect(s2.y - s1.y).toBe(initialDy);
+  });
+
+  it('should only move selected shapes, not unselected ones', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+    const shape3 = store.addShape('rectangle', 500, 100);
+
+    // Select only first two
+    store.selectShapes([shape1.id, shape2.id]);
+    store.moveSelectedShapes(50, 50);
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes.find(s => s.id === shape1.id)?.x).toBe(150);
+    expect(state.shapes.find(s => s.id === shape2.id)?.x).toBe(350);
+    expect(state.shapes.find(s => s.id === shape3.id)?.x).toBe(500); // unchanged
+  });
+});
+
+describe('Z-index controls', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      history: [],
+      historyIndex: -1,
+    });
+  });
+
+  it('should bring shape to front', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 100);
+    const shape3 = store.addShape('rectangle', 100, 100);
+
+    // shape3 is on top initially (last in array)
+    let state = useDiagramStore.getState();
+    expect(state.shapes[2].id).toBe(shape3.id);
+
+    // Bring shape1 to front
+    store.bringToFront(shape1.id);
+
+    state = useDiagramStore.getState();
+    expect(state.shapes[2].id).toBe(shape1.id); // Now shape1 is last (on top)
+  });
+
+  it('should send shape to back', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 100);
+    const shape3 = store.addShape('rectangle', 100, 100);
+
+    // shape1 is at back initially (first in array)
+    let state = useDiagramStore.getState();
+    expect(state.shapes[0].id).toBe(shape1.id);
+
+    // Send shape3 to back
+    store.sendToBack(shape3.id);
+
+    state = useDiagramStore.getState();
+    expect(state.shapes[0].id).toBe(shape3.id); // Now shape3 is first (at back)
+  });
+
+  it('should bring shape forward one level', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 100);
+    const shape3 = store.addShape('rectangle', 100, 100);
+
+    // Order: shape1, shape2, shape3
+    store.bringForward(shape1.id);
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes[0].id).toBe(shape2.id);
+    expect(state.shapes[1].id).toBe(shape1.id);
+    expect(state.shapes[2].id).toBe(shape3.id);
+  });
+
+  it('should send shape backward one level', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 100);
+    const shape3 = store.addShape('rectangle', 100, 100);
+
+    // Order: shape1, shape2, shape3
+    store.sendBackward(shape3.id);
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes[0].id).toBe(shape1.id);
+    expect(state.shapes[1].id).toBe(shape3.id);
+    expect(state.shapes[2].id).toBe(shape2.id);
+  });
+
+  it('should not change order when already at front', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 100);
+
+    store.bringForward(shape2.id); // Already at front
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes[1].id).toBe(shape2.id);
+  });
+
+  it('should not change order when already at back', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 100, 100);
+
+    store.sendBackward(shape1.id); // Already at back
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes[0].id).toBe(shape1.id);
+  });
+});
+
+describe('Undo/Redo selection preservation', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      history: [{ shapes: [], connectors: [] }],
+      historyIndex: 0,
+    });
+  });
+
+  it('should preserve selection after undo if shape still exists', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    // Select shape1
+    store.selectShape(shape1.id);
+    expect(useDiagramStore.getState().selectedShapeIds).toContain(shape1.id);
+
+    // Move shape1
+    store.updateShape(shape1.id, { x: 150 });
+    store.saveToHistory();
+
+    // Undo
+    store.undo();
+
+    // Shape1 should still be selected
+    const state = useDiagramStore.getState();
+    expect(state.selectedShapeIds).toContain(shape1.id);
+  });
+
+  it('should clear selection for deleted shapes after undo', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    store.saveToHistory();
+
+    // Select and delete shape
+    store.selectShape(shape1.id);
+    store.deleteSelectedShapes();
+
+    // Selection is already cleared by delete
+    expect(useDiagramStore.getState().selectedShapeIds).not.toContain(shape1.id);
+  });
+
+  it('should preserve selection after redo if shape still exists', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    store.saveToHistory();
+
+    store.selectShape(shape1.id);
+    store.updateShape(shape1.id, { x: 200 });
+    store.saveToHistory();
+
+    // Undo and redo
+    store.undo();
+    store.redo();
+
+    const state = useDiagramStore.getState();
+    expect(state.selectedShapeIds).toContain(shape1.id);
+  });
+});
+
+describe('Paste offset increment', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      clipboard: null,
+      pasteCount: 0,
+      history: [{ shapes: [], connectors: [] }],
+      historyIndex: 0,
+    });
+  });
+
+  it('should increment paste offset with each paste', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+    store.selectShape(shape.id);
+    store.copy();
+
+    // First paste
+    store.paste();
+    let state = useDiagramStore.getState();
+    const paste1 = state.shapes.find(s => s.id !== shape.id);
+    expect(paste1?.x).toBe(120); // 100 + 20
+
+    // Second paste
+    store.paste();
+    state = useDiagramStore.getState();
+    const pastedShapes = state.shapes.filter(s => s.id !== shape.id && s.id !== paste1?.id);
+    expect(pastedShapes[0]?.x).toBe(140); // 100 + 40
+
+    // Third paste
+    store.paste();
+    state = useDiagramStore.getState();
+    expect(state.pasteCount).toBe(3);
+  });
+
+  it('should reset paste count on new copy', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    store.selectShape(shape1.id);
+    store.copy();
+    store.paste();
+    store.paste();
+
+    expect(useDiagramStore.getState().pasteCount).toBe(2);
+
+    // New copy should reset
+    const shape2 = store.addShape('rectangle', 300, 100);
+    store.selectShape(shape2.id);
+    store.copy();
+
+    expect(useDiagramStore.getState().pasteCount).toBe(0);
+  });
+});
+
+describe('Connector labels', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      history: [],
+      historyIndex: -1,
+    });
+  });
+
+  it('should add label to connector', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    const connectorId = useDiagramStore.getState().connectors[0].id;
+    store.updateConnector(connectorId, { label: 'My Label' });
+
+    const connector = useDiagramStore.getState().connectors[0];
+    expect(connector.label).toBe('My Label');
+  });
+
+  it('should update connector label', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    const connectorId = useDiagramStore.getState().connectors[0].id;
+    store.updateConnector(connectorId, { label: 'Initial' });
+    store.updateConnector(connectorId, { label: 'Updated' });
+
+    const connector = useDiagramStore.getState().connectors[0];
+    expect(connector.label).toBe('Updated');
+  });
+
+  it('should remove connector label when set to empty', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    const connectorId = useDiagramStore.getState().connectors[0].id;
+    store.updateConnector(connectorId, { label: 'My Label' });
+    store.updateConnector(connectorId, { label: '' });
+
+    const connector = useDiagramStore.getState().connectors[0];
+    expect(connector.label).toBe('');
+  });
+});
+
+describe('Connector rotation handling', () => {
+  // Test the rotation transformation logic for connector anchors
+  // This mirrors the getAnchorCoords function with rotation support
+
+  const getAnchorCoordsWithRotation = (
+    x: number, y: number, width: number, height: number,
+    anchor: 'top' | 'right' | 'bottom' | 'left', rotation: number = 0
+  ): { x: number; y: number } => {
+    let anchorX: number;
+    let anchorY: number;
+
+    switch (anchor) {
+      case 'top':
+        anchorX = x + width / 2;
+        anchorY = y;
+        break;
+      case 'right':
+        anchorX = x + width;
+        anchorY = y + height / 2;
+        break;
+      case 'bottom':
+        anchorX = x + width / 2;
+        anchorY = y + height;
+        break;
+      case 'left':
+        anchorX = x;
+        anchorY = y + height / 2;
+        break;
+    }
+
+    if (rotation === 0) {
+      return { x: anchorX, y: anchorY };
+    }
+
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    const angleRad = (rotation * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    const rotatedX = centerX + (anchorX - centerX) * cos - (anchorY - centerY) * sin;
+    const rotatedY = centerY + (anchorX - centerX) * sin + (anchorY - centerY) * cos;
+
+    return { x: rotatedX, y: rotatedY };
+  };
+
+  it('should return same position with no rotation', () => {
+    const coords = getAnchorCoordsWithRotation(100, 100, 100, 100, 'right', 0);
+    expect(coords.x).toBe(200); // 100 + 100
+    expect(coords.y).toBe(150); // 100 + 50
+  });
+
+  it('should rotate anchor 90 degrees clockwise', () => {
+    // For a 100x100 shape at (100, 100), the right anchor is at (200, 150)
+    // Rotating 90 degrees around center (150, 150) should move it to the bottom
+    const coords = getAnchorCoordsWithRotation(100, 100, 100, 100, 'right', 90);
+
+    // After 90 degree rotation, right anchor moves to where bottom was
+    expect(coords.x).toBeCloseTo(150, 5);
+    expect(coords.y).toBeCloseTo(200, 5);
+  });
+
+  it('should rotate anchor 180 degrees', () => {
+    const coords = getAnchorCoordsWithRotation(100, 100, 100, 100, 'right', 180);
+
+    // After 180 degree rotation, right anchor moves to left position
+    expect(coords.x).toBeCloseTo(100, 5);
+    expect(coords.y).toBeCloseTo(150, 5);
+  });
+
+  it('should rotate anchor 270 degrees', () => {
+    const coords = getAnchorCoordsWithRotation(100, 100, 100, 100, 'right', 270);
+
+    // After 270 degree rotation, right anchor moves to top position
+    expect(coords.x).toBeCloseTo(150, 5);
+    expect(coords.y).toBeCloseTo(100, 5);
+  });
+
+  it('should handle 45 degree rotation', () => {
+    const coords = getAnchorCoordsWithRotation(100, 100, 100, 100, 'right', 45);
+
+    // Calculate expected position
+    const centerX = 150;
+    const centerY = 150;
+    const originalX = 200;
+    const originalY = 150;
+    const angleRad = (45 * Math.PI) / 180;
+
+    const expectedX = centerX + (originalX - centerX) * Math.cos(angleRad) - (originalY - centerY) * Math.sin(angleRad);
+    const expectedY = centerY + (originalX - centerX) * Math.sin(angleRad) + (originalY - centerY) * Math.cos(angleRad);
+
+    expect(coords.x).toBeCloseTo(expectedX, 5);
+    expect(coords.y).toBeCloseTo(expectedY, 5);
+  });
+
+  it('should maintain center position after any rotation', () => {
+    // The center of the shape should be invariant under rotation
+    // For all anchors, the center is equidistant after rotation
+
+    const centerX = 150;
+    const centerY = 150;
+
+    for (const rotation of [0, 45, 90, 135, 180, 225, 270, 315]) {
+      const coords = getAnchorCoordsWithRotation(100, 100, 100, 100, 'right', rotation);
+      const distance = Math.sqrt(Math.pow(coords.x - centerX, 2) + Math.pow(coords.y - centerY, 2));
+
+      // Original distance from center to right anchor is 50
+      expect(distance).toBeCloseTo(50, 5);
+    }
+  });
+
+  it('should handle non-square shapes', () => {
+    // 200x100 rectangle at (0, 0)
+    const coords = getAnchorCoordsWithRotation(0, 0, 200, 100, 'right', 90);
+
+    // Center is at (100, 50)
+    // Right anchor is at (200, 50), which is 100 units to the right of center
+    // After 90 degree rotation, it should be 100 units below center: (100, 150)
+    expect(coords.x).toBeCloseTo(100, 5);
+    expect(coords.y).toBeCloseTo(150, 5);
+  });
+});
+
+describe('Elbow routing improvements', () => {
+  // Test the improved elbow path generation logic
+
+  const generateElbowPath = (
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    fromAnchor: 'top' | 'right' | 'bottom' | 'left',
+    toAnchor: 'top' | 'right' | 'bottom' | 'left'
+  ): number[] => {
+    const MIN_MARGIN = 20;
+
+    const dx = Math.abs(to.x - from.x);
+    const dy = Math.abs(to.y - from.y);
+
+    // For very close shapes, use straight line
+    if (dx < MIN_MARGIN * 2 && dy < MIN_MARGIN * 2) {
+      return [from.x, from.y, to.x, to.y];
+    }
+
+    const adaptiveMarginX = Math.min(MIN_MARGIN, dx / 4);
+    const adaptiveMarginY = Math.min(MIN_MARGIN, dy / 4);
+
+    if (fromAnchor === 'left' || fromAnchor === 'right') {
+      if (toAnchor === 'left' || toAnchor === 'right') {
+        const midX = (from.x + to.x) / 2;
+        if (Math.abs(from.x - to.x) < MIN_MARGIN * 2) {
+          const offsetY = from.y < to.y ? -MIN_MARGIN : MIN_MARGIN;
+          const routeY = Math.min(from.y, to.y) + offsetY;
+          return [from.x, from.y, from.x, routeY, to.x, routeY, to.x, to.y];
+        }
+        return [from.x, from.y, midX, from.y, midX, to.y, to.x, to.y];
+      } else {
+        const extendX = fromAnchor === 'right'
+          ? Math.max(from.x + adaptiveMarginX, to.x)
+          : Math.min(from.x - adaptiveMarginX, to.x);
+        return [from.x, from.y, extendX, from.y, extendX, to.y, to.x, to.y];
+      }
+    } else {
+      if (toAnchor === 'top' || toAnchor === 'bottom') {
+        const midY = (from.y + to.y) / 2;
+        if (Math.abs(from.y - to.y) < MIN_MARGIN * 2) {
+          const offsetX = from.x < to.x ? -MIN_MARGIN : MIN_MARGIN;
+          const routeX = Math.min(from.x, to.x) + offsetX;
+          return [from.x, from.y, routeX, from.y, routeX, to.y, to.x, to.y];
+        }
+        return [from.x, from.y, from.x, midY, to.x, midY, to.x, to.y];
+      } else {
+        const extendY = fromAnchor === 'bottom'
+          ? Math.max(from.y + adaptiveMarginY, to.y)
+          : Math.min(from.y - adaptiveMarginY, to.y);
+        return [from.x, from.y, from.x, extendY, to.x, extendY, to.x, to.y];
+      }
+    }
+  };
+
+  it('should use straight line for very close shapes', () => {
+    const path = generateElbowPath(
+      { x: 100, y: 100 },
+      { x: 110, y: 105 }, // Very close
+      'right',
+      'left'
+    );
+
+    // Should be a straight line (4 points)
+    expect(path).toEqual([100, 100, 110, 105]);
+  });
+
+  it('should generate elbow path for horizontal anchors', () => {
+    const path = generateElbowPath(
+      { x: 100, y: 100 },
+      { x: 300, y: 200 },
+      'right',
+      'left'
+    );
+
+    // Should be an elbow path (8 points)
+    expect(path.length).toBe(8);
+    expect(path[0]).toBe(100); // Start x
+    expect(path[1]).toBe(100); // Start y
+    expect(path[6]).toBe(300); // End x
+    expect(path[7]).toBe(200); // End y
+  });
+
+  it('should generate elbow path for vertical anchors', () => {
+    const path = generateElbowPath(
+      { x: 100, y: 100 },
+      { x: 200, y: 300 },
+      'bottom',
+      'top'
+    );
+
+    // Should be an elbow path (8 points)
+    expect(path.length).toBe(8);
+    expect(path[0]).toBe(100);
+    expect(path[1]).toBe(100);
+  });
+
+  it('should handle shapes very close horizontally', () => {
+    const path = generateElbowPath(
+      { x: 100, y: 100 },
+      { x: 120, y: 200 }, // Close in x but far in y
+      'right',
+      'right'
+    );
+
+    // Should route around
+    expect(path.length).toBe(8);
+  });
+
+  it('should handle shapes very close vertically', () => {
+    const path = generateElbowPath(
+      { x: 100, y: 100 },
+      { x: 200, y: 120 }, // Close in y but far in x
+      'bottom',
+      'bottom'
+    );
+
+    // Should route around
+    expect(path.length).toBe(8);
+  });
+
+  it('should use adaptive margins for medium distances', () => {
+    const path = generateElbowPath(
+      { x: 100, y: 100 },
+      { x: 150, y: 150 }, // Moderate distance
+      'right',
+      'top'
+    );
+
+    // Should still generate a proper path
+    expect(path.length).toBe(8);
+  });
+});

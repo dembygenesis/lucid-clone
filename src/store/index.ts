@@ -51,6 +51,7 @@ interface DiagramState {
   history: HistoryEntry[];
   historyIndex: number;
   clipboard: ClipboardData | null;
+  pasteCount: number;
 
   // Actions
   setDiagram: (id: string, name: string, shapes: Shape[], connectors: Connector[], settings: DiagramSettings) => void;
@@ -59,8 +60,16 @@ interface DiagramState {
   // Shape actions
   addShape: (type: Shape['type'], x: number, y: number, label?: string) => Shape;
   updateShape: (id: string, updates: Partial<Shape>) => void;
+  updateShapes: (updates: { id: string; changes: Partial<Shape> }[]) => void;
+  moveSelectedShapes: (dx: number, dy: number) => void;
   deleteShape: (id: string) => void;
   deleteSelectedShapes: () => void;
+
+  // Z-index actions
+  bringToFront: (id: string) => void;
+  sendToBack: (id: string) => void;
+  bringForward: (id: string) => void;
+  sendBackward: (id: string) => void;
 
   // Selection
   selectShape: (id: string, addToSelection?: boolean) => void;
@@ -144,6 +153,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   history: [],
   historyIndex: -1,
   clipboard: null,
+  pasteCount: 0,
 
   setDiagram: (id, name, shapes, connectors, settings) => {
     set({
@@ -178,29 +188,37 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
   },
 
   undo: () => {
-    const { history, historyIndex } = get();
+    const { history, historyIndex, selectedShapeIds, selectedConnectorIds } = get();
     if (historyIndex > 0) {
       const prevState = history[historyIndex - 1];
+      const prevShapeIds = new Set(prevState.shapes.map(s => s.id));
+      const prevConnectorIds = new Set(prevState.connectors.map(c => c.id));
+
+      // Preserve selection for shapes/connectors that still exist after undo
       set({
         shapes: [...prevState.shapes],
         connectors: [...prevState.connectors],
         historyIndex: historyIndex - 1,
-        selectedShapeIds: [],
-        selectedConnectorIds: [],
+        selectedShapeIds: selectedShapeIds.filter(id => prevShapeIds.has(id)),
+        selectedConnectorIds: selectedConnectorIds.filter(id => prevConnectorIds.has(id)),
       });
     }
   },
 
   redo: () => {
-    const { history, historyIndex } = get();
+    const { history, historyIndex, selectedShapeIds, selectedConnectorIds } = get();
     if (historyIndex < history.length - 1) {
       const nextState = history[historyIndex + 1];
+      const nextShapeIds = new Set(nextState.shapes.map(s => s.id));
+      const nextConnectorIds = new Set(nextState.connectors.map(c => c.id));
+
+      // Preserve selection for shapes/connectors that still exist after redo
       set({
         shapes: [...nextState.shapes],
         connectors: [...nextState.connectors],
         historyIndex: historyIndex + 1,
-        selectedShapeIds: [],
-        selectedConnectorIds: [],
+        selectedShapeIds: selectedShapeIds.filter(id => nextShapeIds.has(id)),
+        selectedConnectorIds: selectedConnectorIds.filter(id => nextConnectorIds.has(id)),
       });
     }
   },
@@ -224,15 +242,17 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
           shapes: selectedShapes,
           connectors: selectedConnectors,
         },
+        pasteCount: 0, // Reset paste count on new copy
       });
     }
   },
 
   paste: () => {
-    const { clipboard, saveToHistory } = get();
+    const { clipboard, saveToHistory, pasteCount } = get();
     if (!clipboard || clipboard.shapes.length === 0) return;
 
-    const PASTE_OFFSET = 20;
+    const BASE_OFFSET = 20;
+    const offset = BASE_OFFSET * (pasteCount + 1); // Increment offset for each paste
 
     // Create ID mapping for shapes
     const idMap = new Map<string, string>();
@@ -242,8 +262,8 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       return {
         ...shape,
         id: newId,
-        x: shape.x + PASTE_OFFSET,
-        y: shape.y + PASTE_OFFSET,
+        x: shape.x + offset,
+        y: shape.y + offset,
       };
     });
 
@@ -262,6 +282,7 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       connectors: [...state.connectors, ...newConnectors],
       selectedShapeIds: newShapes.map(s => s.id),
       selectedConnectorIds: [],
+      pasteCount: state.pasteCount + 1,
     }));
 
     saveToHistory();
@@ -324,6 +345,28 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
     // History is saved on drag end via the Canvas component
   },
 
+  updateShapes: (updates) => {
+    set((state) => ({
+      shapes: state.shapes.map((s) => {
+        const update = updates.find((u) => u.id === s.id);
+        return update ? { ...s, ...update.changes } : s;
+      }),
+    }));
+  },
+
+  moveSelectedShapes: (dx, dy) => {
+    const { selectedShapeIds } = get();
+    if (selectedShapeIds.length === 0) return;
+
+    set((state) => ({
+      shapes: state.shapes.map((s) =>
+        selectedShapeIds.includes(s.id)
+          ? { ...s, x: s.x + dx, y: s.y + dy }
+          : s
+      ),
+    }));
+  },
+
   deleteShape: (id) => {
     const { saveToHistory } = get();
     set((state) => ({
@@ -350,6 +393,51 @@ export const useDiagramStore = create<DiagramState>((set, get) => ({
       selectedShapeIds: [],
     }));
     saveToHistory();
+  },
+
+  // Z-index actions (shapes are rendered in array order, last = on top)
+  bringToFront: (id) => {
+    set((state) => {
+      const shape = state.shapes.find((s) => s.id === id);
+      if (!shape) return state;
+      return {
+        shapes: [...state.shapes.filter((s) => s.id !== id), shape],
+      };
+    });
+    get().saveToHistory();
+  },
+
+  sendToBack: (id) => {
+    set((state) => {
+      const shape = state.shapes.find((s) => s.id === id);
+      if (!shape) return state;
+      return {
+        shapes: [shape, ...state.shapes.filter((s) => s.id !== id)],
+      };
+    });
+    get().saveToHistory();
+  },
+
+  bringForward: (id) => {
+    set((state) => {
+      const index = state.shapes.findIndex((s) => s.id === id);
+      if (index === -1 || index === state.shapes.length - 1) return state;
+      const newShapes = [...state.shapes];
+      [newShapes[index], newShapes[index + 1]] = [newShapes[index + 1], newShapes[index]];
+      return { shapes: newShapes };
+    });
+    get().saveToHistory();
+  },
+
+  sendBackward: (id) => {
+    set((state) => {
+      const index = state.shapes.findIndex((s) => s.id === id);
+      if (index <= 0) return state;
+      const newShapes = [...state.shapes];
+      [newShapes[index - 1], newShapes[index]] = [newShapes[index], newShapes[index - 1]];
+      return { shapes: newShapes };
+    });
+    get().saveToHistory();
   },
 
   selectShape: (id, addToSelection = false) => {

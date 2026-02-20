@@ -42,6 +42,8 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     connectionState,
     addShape,
     updateShape,
+    updateShapes,
+    moveSelectedShapes,
     selectShape,
     selectConnector,
     clearSelection,
@@ -57,7 +59,15 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     deleteSelectedShapes,
     deleteSelectedConnectors,
     quickCreateConnectedShape,
+    bringToFront,
+    sendToBack,
+    bringForward,
+    sendBackward,
+    saveToHistory,
   } = useDiagramStore();
+
+  // Track drag start positions for multi-select drag
+  const dragStartRef = useRef<{ shapeId: string; startX: number; startY: number } | null>(null);
 
   // Update transformer when selection changes
   useEffect(() => {
@@ -142,6 +152,60 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         return;
       }
 
+      // Arrow keys - nudge selected shapes
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        if (selectedShapeIds.length > 0) {
+          e.preventDefault();
+          const nudgeAmount = e.shiftKey ? 10 : (settings.snapToGrid ? settings.gridSize : 1);
+          let dx = 0, dy = 0;
+          switch (e.key) {
+            case 'ArrowUp': dy = -nudgeAmount; break;
+            case 'ArrowDown': dy = nudgeAmount; break;
+            case 'ArrowLeft': dx = -nudgeAmount; break;
+            case 'ArrowRight': dx = nudgeAmount; break;
+          }
+          moveSelectedShapes(dx, dy);
+          saveToHistory();
+        }
+        return;
+      }
+
+      // Cmd/Ctrl + ] - Bring forward
+      if (isMeta && e.key === ']') {
+        e.preventDefault();
+        if (selectedShapeIds.length === 1) {
+          bringForward(selectedShapeIds[0]);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl + [ - Send backward
+      if (isMeta && e.key === '[') {
+        e.preventDefault();
+        if (selectedShapeIds.length === 1) {
+          sendBackward(selectedShapeIds[0]);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl + Shift + ] - Bring to front
+      if (isMeta && e.shiftKey && e.key === '}') {
+        e.preventDefault();
+        if (selectedShapeIds.length === 1) {
+          bringToFront(selectedShapeIds[0]);
+        }
+        return;
+      }
+
+      // Cmd/Ctrl + Shift + [ - Send to back
+      if (isMeta && e.shiftKey && e.key === '{') {
+        e.preventDefault();
+        if (selectedShapeIds.length === 1) {
+          sendToBack(selectedShapeIds[0]);
+        }
+        return;
+      }
+
       // Tool shortcuts
       if (e.key === 'v' || e.key === 'V') {
         setTool('select');
@@ -162,7 +226,7 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors, undo, redo, copy, paste, duplicate, selectAll, setTool]);
+  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors, undo, redo, copy, paste, duplicate, selectAll, setTool, selectedShapeIds, settings, moveSelectedShapes, saveToHistory, bringForward, sendBackward, bringToFront, sendToBack]);
 
   const getPointerPosition = useCallback(() => {
     const stage = stageRef.current;
@@ -308,23 +372,79 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       selectShape(shape.id, e.evt.shiftKey);
     };
 
+    // Track drag start for multi-select
+    const handleDragStart = (e: KonvaEventObject<DragEvent>) => {
+      const node = e.target;
+      dragStartRef.current = {
+        shapeId: shape.id,
+        startX: node.x(),
+        startY: node.y(),
+      };
+    };
+
     // Real-time position update during drag (for connector live updates)
+    // Supports multi-select: moves all selected shapes together
     const handleDragMove = (e: KonvaEventObject<DragEvent>) => {
       const node = e.target;
-      // Update shape position in real-time for connector updates
-      updateShape(shape.id, {
-        x: node.x(),
-        y: node.y(),
-      });
+      const currentX = node.x();
+      const currentY = node.y();
+
+      if (selectedShapeIds.length > 1 && selectedShapeIds.includes(shape.id) && dragStartRef.current) {
+        // Multi-select drag: calculate delta and move all selected shapes
+        const dx = currentX - dragStartRef.current.startX;
+        const dy = currentY - dragStartRef.current.startY;
+
+        // Update all selected shapes
+        const updates = selectedShapeIds.map(id => {
+          const s = shapes.find(sh => sh.id === id);
+          if (!s) return null;
+          if (id === shape.id) {
+            return { id, changes: { x: currentX, y: currentY } };
+          }
+          return { id, changes: { x: s.x + dx, y: s.y + dy } };
+        }).filter(Boolean) as { id: string; changes: Partial<Shape> }[];
+
+        updateShapes(updates);
+
+        // Update drag start reference for next delta calculation
+        dragStartRef.current.startX = currentX;
+        dragStartRef.current.startY = currentY;
+      } else {
+        // Single shape drag
+        updateShape(shape.id, { x: currentX, y: currentY });
+      }
     };
 
     const handleDragEnd = (e: KonvaEventObject<DragEvent>) => {
-      const { snapToGrid } = useDiagramStore.getState();
-      const snapped = snapToGrid(e.target.x(), e.target.y());
-      updateShape(shape.id, { x: snapped.x, y: snapped.y });
-      // Reset position to snapped values
-      e.target.x(snapped.x);
-      e.target.y(snapped.y);
+      const { snapToGrid, saveToHistory } = useDiagramStore.getState();
+      const node = e.target;
+
+      if (selectedShapeIds.length > 1 && selectedShapeIds.includes(shape.id)) {
+        // Multi-select: snap all selected shapes to grid
+        const snapped = snapToGrid(node.x(), node.y());
+        const dx = snapped.x - node.x();
+        const dy = snapped.y - node.y();
+
+        const updates = selectedShapeIds.map(id => {
+          const s = shapes.find(sh => sh.id === id);
+          if (!s) return null;
+          const snapPos = snapToGrid(s.x + dx, s.y + dy);
+          return { id, changes: { x: snapPos.x, y: snapPos.y } };
+        }).filter(Boolean) as { id: string; changes: Partial<Shape> }[];
+
+        updateShapes(updates);
+        node.x(snapped.x);
+        node.y(snapped.y);
+      } else {
+        // Single shape: snap to grid
+        const snapped = snapToGrid(node.x(), node.y());
+        updateShape(shape.id, { x: snapped.x, y: snapped.y });
+        node.x(snapped.x);
+        node.y(snapped.y);
+      }
+
+      dragStartRef.current = null;
+      saveToHistory();
     };
 
     // Real-time size update during transform (for connector live updates)
@@ -380,6 +500,7 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       onClick: handleClick,
       onMouseEnter: () => setHoveredShape(shape.id),
       onMouseLeave: () => setHoveredShape(null),
+      onDragStart: handleDragStart,
       onDragMove: handleDragMove,
       onDragEnd: handleDragEnd,
       onTransform: handleTransform,
@@ -556,16 +677,49 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     return { fromAnchor, toAnchor };
   };
 
-  // Calculate anchor point coordinates
+  // Calculate anchor point coordinates with rotation support
   const getAnchorCoords = (
-    x: number, y: number, width: number, height: number, anchor: AnchorPosition
+    x: number, y: number, width: number, height: number, anchor: AnchorPosition, rotation: number = 0
   ): { x: number; y: number } => {
+    // Calculate anchor position relative to shape top-left
+    let anchorX: number;
+    let anchorY: number;
+
     switch (anchor) {
-      case 'top': return { x: x + width / 2, y };
-      case 'right': return { x: x + width, y: y + height / 2 };
-      case 'bottom': return { x: x + width / 2, y: y + height };
-      case 'left': return { x, y: y + height / 2 };
+      case 'top':
+        anchorX = x + width / 2;
+        anchorY = y;
+        break;
+      case 'right':
+        anchorX = x + width;
+        anchorY = y + height / 2;
+        break;
+      case 'bottom':
+        anchorX = x + width / 2;
+        anchorY = y + height;
+        break;
+      case 'left':
+        anchorX = x;
+        anchorY = y + height / 2;
+        break;
     }
+
+    // If no rotation, return the simple coordinates
+    if (rotation === 0) {
+      return { x: anchorX, y: anchorY };
+    }
+
+    // Apply rotation transformation around shape center
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    const angleRad = (rotation * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+
+    const rotatedX = centerX + (anchorX - centerX) * cos - (anchorY - centerY) * sin;
+    const rotatedY = centerY + (anchorX - centerX) * sin + (anchorY - centerY) * cos;
+
+    return { x: rotatedX, y: rotatedY };
   };
 
   // Generate smart elbow path that avoids going through shapes
@@ -575,20 +729,41 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     fromAnchor: AnchorPosition,
     toAnchor: AnchorPosition
   ): number[] => {
-    const MARGIN = 20; // Minimum distance from shape edges
+    const MIN_MARGIN = 20; // Minimum distance from shape edges
+
+    // Calculate distance between endpoints
+    const dx = Math.abs(to.x - from.x);
+    const dy = Math.abs(to.y - from.y);
+
+    // For very close shapes (less than 2x margin), use straight line
+    if (dx < MIN_MARGIN * 2 && dy < MIN_MARGIN * 2) {
+      return [from.x, from.y, to.x, to.y];
+    }
+
+    // Calculate adaptive margin based on available space
+    const adaptiveMarginX = Math.min(MIN_MARGIN, dx / 4);
+    const adaptiveMarginY = Math.min(MIN_MARGIN, dy / 4);
 
     // For horizontal anchors (left/right)
     if (fromAnchor === 'left' || fromAnchor === 'right') {
       if (toAnchor === 'left' || toAnchor === 'right') {
         // Both horizontal - use midpoint
         const midX = (from.x + to.x) / 2;
+
+        // Check if shapes are very close horizontally
+        if (Math.abs(from.x - to.x) < MIN_MARGIN * 2) {
+          // Route around by going up/down first
+          const offsetY = from.y < to.y ? -MIN_MARGIN : MIN_MARGIN;
+          const routeY = Math.min(from.y, to.y) + offsetY;
+          return [from.x, from.y, from.x, routeY, to.x, routeY, to.x, to.y];
+        }
+
         return [from.x, from.y, midX, from.y, midX, to.y, to.x, to.y];
       } else {
         // From horizontal, to vertical
-        // Go out horizontally first, then vertically
         const extendX = fromAnchor === 'right'
-          ? Math.max(from.x + MARGIN, to.x)
-          : Math.min(from.x - MARGIN, to.x);
+          ? Math.max(from.x + adaptiveMarginX, to.x)
+          : Math.min(from.x - adaptiveMarginX, to.x);
         return [from.x, from.y, extendX, from.y, extendX, to.y, to.x, to.y];
       }
     } else {
@@ -596,13 +771,21 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       if (toAnchor === 'top' || toAnchor === 'bottom') {
         // Both vertical - use midpoint
         const midY = (from.y + to.y) / 2;
+
+        // Check if shapes are very close vertically
+        if (Math.abs(from.y - to.y) < MIN_MARGIN * 2) {
+          // Route around by going left/right first
+          const offsetX = from.x < to.x ? -MIN_MARGIN : MIN_MARGIN;
+          const routeX = Math.min(from.x, to.x) + offsetX;
+          return [from.x, from.y, routeX, from.y, routeX, to.y, to.x, to.y];
+        }
+
         return [from.x, from.y, from.x, midY, to.x, midY, to.x, to.y];
       } else {
         // From vertical, to horizontal
-        // Go out vertically first, then horizontally
         const extendY = fromAnchor === 'bottom'
-          ? Math.max(from.y + MARGIN, to.y)
-          : Math.min(from.y - MARGIN, to.y);
+          ? Math.max(from.y + adaptiveMarginY, to.y)
+          : Math.min(from.y - adaptiveMarginY, to.y);
         return [from.x, from.y, from.x, extendY, to.x, extendY, to.x, to.y];
       }
     }
@@ -635,15 +818,30 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
+    // Get rotation values (also check Konva nodes for current rotation during transform)
+    let fromRotation = fromShape.rotation || 0;
+    let toRotation = toShape.rotation || 0;
+
+    if (stage) {
+      const fromNode = stage.findOne(`#shape-${connector.fromShapeId}`);
+      const toNode = stage.findOne(`#shape-${connector.toShapeId}`);
+      if (fromNode) {
+        fromRotation = fromNode.rotation() || 0;
+      }
+      if (toNode) {
+        toRotation = toNode.rotation() || 0;
+      }
+    }
+
     // Calculate optimal anchors based on current positions (dynamic routing)
     const { fromAnchor, toAnchor } = calculateOptimalAnchors(
       fromX, fromY, fromShape.width, fromShape.height,
       toX, toY, toShape.width, toShape.height
     );
 
-    // Calculate anchor point coordinates
-    const from = getAnchorCoords(fromX, fromY, fromShape.width, fromShape.height, fromAnchor);
-    const to = getAnchorCoords(toX, toY, toShape.width, toShape.height, toAnchor);
+    // Calculate anchor point coordinates with rotation
+    const from = getAnchorCoords(fromX, fromY, fromShape.width, fromShape.height, fromAnchor, fromRotation);
+    const to = getAnchorCoords(toX, toY, toShape.width, toShape.height, toAnchor, toRotation);
 
     const isSelected = selectedConnectorIds.includes(connector.id);
 
@@ -656,23 +854,58 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       points = [from.x, from.y, to.x, to.y];
     }
 
+    // Calculate label position (midpoint of connector)
+    let labelX = (from.x + to.x) / 2;
+    let labelY = (from.y + to.y) / 2;
+
+    // For elbow connectors, use the middle segment's midpoint
+    if (connector.style === 'elbow' && points.length >= 8) {
+      // Middle segment is between points[2,3] and points[4,5]
+      labelX = (points[2] + points[4]) / 2;
+      labelY = (points[3] + points[5]) / 2;
+    }
+
     return (
-      <Arrow
-        key={connector.id}
-        points={points}
-        stroke={isSelected ? '#3b82f6' : connector.stroke}
-        strokeWidth={isSelected ? 3 : connector.strokeWidth}
-        lineCap="round"
-        lineJoin="round"
-        pointerLength={connector.endArrow === 'arrow' ? 10 : 0}
-        pointerWidth={connector.endArrow === 'arrow' ? 10 : 0}
-        pointerAtBeginning={connector.startArrow === 'arrow'}
-        onClick={(e) => {
-          e.cancelBubble = true;
-          selectConnector(connector.id, e.evt.shiftKey);
-        }}
-        hitStrokeWidth={10}
-      />
+      <Group key={connector.id}>
+        <Arrow
+          points={points}
+          stroke={isSelected ? '#3b82f6' : connector.stroke}
+          strokeWidth={isSelected ? 3 : connector.strokeWidth}
+          lineCap="round"
+          lineJoin="round"
+          pointerLength={connector.endArrow === 'arrow' ? 10 : 0}
+          pointerWidth={connector.endArrow === 'arrow' ? 10 : 0}
+          pointerAtBeginning={connector.startArrow === 'arrow'}
+          onClick={(e) => {
+            e.cancelBubble = true;
+            selectConnector(connector.id, e.evt.shiftKey);
+          }}
+          hitStrokeWidth={10}
+        />
+        {connector.label && (
+          <Group x={labelX} y={labelY}>
+            <Rect
+              x={-connector.label.length * 3.5 - 4}
+              y={-10}
+              width={connector.label.length * 7 + 8}
+              height={20}
+              fill="white"
+              stroke={isSelected ? '#3b82f6' : '#e5e7eb'}
+              strokeWidth={1}
+              cornerRadius={4}
+            />
+            <Text
+              text={connector.label}
+              fontSize={12}
+              fill="#374151"
+              align="center"
+              verticalAlign="middle"
+              offsetX={connector.label.length * 3.5}
+              offsetY={6}
+            />
+          </Group>
+        )}
+      </Group>
     );
   };
 
@@ -697,11 +930,20 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
-    // Calculate anchor point using actual node position
-    const from = {
-      x: fromX + (connectionState.fromAnchor === 'left' ? 0 : connectionState.fromAnchor === 'right' ? fromShape.width : fromShape.width / 2),
-      y: fromY + (connectionState.fromAnchor === 'top' ? 0 : connectionState.fromAnchor === 'bottom' ? fromShape.height : fromShape.height / 2),
-    };
+    // Get rotation from Konva node for real-time accuracy
+    let fromRotation = fromShape.rotation || 0;
+    if (stage) {
+      const fromNode = stage.findOne(`#shape-${connectionState.fromShapeId}`);
+      if (fromNode) {
+        fromRotation = fromNode.rotation() || 0;
+      }
+    }
+
+    // Calculate anchor point using actual node position with rotation
+    const from = getAnchorCoords(
+      fromX, fromY, fromShape.width, fromShape.height,
+      connectionState.fromAnchor, fromRotation
+    );
 
     return (
       <Line
