@@ -525,6 +525,151 @@ test.describe('Real-time Connector Updates', () => {
     // Test passes if no errors - visual verification via screenshot
     await page.screenshot({ path: 'e2e/screenshots/connector-after-drag.png' });
   });
+
+  test('should maintain connector during continuous drag movement', async ({ page }) => {
+    // Create two shapes
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 350, 300);
+    await page.waitForTimeout(200);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 300);
+    await page.waitForTimeout(200);
+
+    // Create connector using connector tool
+    await page.getByTitle('Connector (C)').click();
+    await page.waitForTimeout(100);
+
+    // Start from right anchor of first shape (450, 350)
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Complete to left anchor of second shape (600, 350)
+    if (await page.locator('text=Drawing connection').isVisible()) {
+      await clickCanvas(page, 600, 350);
+      await page.waitForTimeout(300);
+    }
+
+    // Screenshot before drag
+    await page.screenshot({ path: 'e2e/screenshots/connector-before-continuous-drag.png' });
+
+    // Switch to select tool and drag shape multiple times
+    await page.getByTitle('Select (V)').click();
+    await page.waitForTimeout(100);
+
+    // Select first shape
+    await clickCanvas(page, 400, 350);
+    await page.waitForTimeout(200);
+
+    // Perform multiple drag operations to simulate continuous movement
+    const canvas = page.locator('canvas').first();
+
+    // Drag down
+    await canvas.dragTo(canvas, {
+      sourcePosition: { x: 400, y: 350 },
+      targetPosition: { x: 400, y: 400 },
+    });
+    await page.waitForTimeout(100);
+
+    // Drag right
+    await canvas.dragTo(canvas, {
+      sourcePosition: { x: 400, y: 400 },
+      targetPosition: { x: 450, y: 400 },
+    });
+    await page.waitForTimeout(100);
+
+    // Drag down-left
+    await canvas.dragTo(canvas, {
+      sourcePosition: { x: 450, y: 400 },
+      targetPosition: { x: 420, y: 450 },
+    });
+    await page.waitForTimeout(200);
+
+    // Screenshot after multiple drags
+    await page.screenshot({ path: 'e2e/screenshots/connector-after-continuous-drag.png' });
+
+    // Verify shape is still selectable at new position
+    await clickCanvas(page, 420, 450);
+    await page.waitForTimeout(200);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
+
+  test('should update connector when dragging both connected shapes', async ({ page }) => {
+    // Create two shapes
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 350, 300);
+    await page.waitForTimeout(200);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 300);
+    await page.waitForTimeout(200);
+
+    // Quick-create connector by selecting first shape and clicking anchor
+    await clickCanvas(page, 400, 350);
+    await page.waitForTimeout(200);
+    await clickCanvas(page, 450, 350); // right anchor
+    await page.waitForTimeout(300);
+
+    // Screenshot initial state
+    await page.screenshot({ path: 'e2e/screenshots/both-shapes-before-drag.png' });
+
+    // Drag first shape down
+    await clickCanvas(page, 400, 350);
+    await page.waitForTimeout(100);
+    await dragOnCanvas(page, 400, 350, 400, 450);
+    await page.waitForTimeout(200);
+
+    // Now drag second shape up
+    await clickCanvas(page, 650, 350);
+    await page.waitForTimeout(100);
+    await dragOnCanvas(page, 650, 350, 650, 250);
+    await page.waitForTimeout(200);
+
+    // Screenshot final state
+    await page.screenshot({ path: 'e2e/screenshots/both-shapes-after-drag.png' });
+
+    // Both shapes should still be selectable
+    await clickCanvas(page, 400, 450);
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    await clickCanvas(page, 650, 250);
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
+
+  test('should update K8s shape connectors during drag', async ({ page }) => {
+    // Add Pod shape
+    await page.getByTitle('Pod').click();
+    await page.waitForTimeout(300);
+
+    // Add Service shape
+    await page.getByTitle('Service').click();
+    await page.waitForTimeout(300);
+
+    // Select Pod and quick-create connection
+    await clickCanvas(page, 640, 360);
+    await page.waitForTimeout(200);
+
+    // Click right anchor to create connected shape
+    await clickCanvas(page, 680, 360);
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: 'e2e/screenshots/k8s-connector-before-drag.png' });
+
+    // Select Pod and drag it
+    await clickCanvas(page, 640, 360);
+    await page.waitForTimeout(100);
+    await dragOnCanvas(page, 640, 360, 500, 400);
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: 'e2e/screenshots/k8s-connector-after-drag.png' });
+
+    // Shape should be selectable at new position
+    await clickCanvas(page, 500, 400);
+    await page.waitForTimeout(200);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
 });
 
 test.describe('Multiple Shape Operations', () => {

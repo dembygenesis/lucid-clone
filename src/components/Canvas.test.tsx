@@ -1043,6 +1043,142 @@ describe('Quick-create connected shape', () => {
   });
 });
 
+describe('Connector anchor calculations during drag', () => {
+  // These tests verify the inline anchor calculation logic used in renderConnector
+  // matches the standard getAnchorPoint function, ensuring connectors update correctly
+
+  it('should calculate anchor positions correctly for all anchor types', () => {
+    // Inline calculation (used in Canvas for real-time updates during drag)
+    const calculateAnchor = (x: number, y: number, width: number, height: number, anchor: string) => ({
+      x: x + (anchor === 'left' ? 0 : anchor === 'right' ? width : width / 2),
+      y: y + (anchor === 'top' ? 0 : anchor === 'bottom' ? height : height / 2),
+    });
+
+    const shape: Shape = {
+      id: 'test',
+      type: 'rectangle',
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 80,
+      rotation: 0,
+      fill: '#fff',
+      stroke: '#000',
+      strokeWidth: 2,
+    };
+
+    // Compare inline calculation with getAnchorPoint for all positions
+    const topInline = calculateAnchor(shape.x, shape.y, shape.width, shape.height, 'top');
+    const topOriginal = getAnchorPoint(shape, 'top');
+    expect(topInline).toEqual(topOriginal);
+
+    const rightInline = calculateAnchor(shape.x, shape.y, shape.width, shape.height, 'right');
+    const rightOriginal = getAnchorPoint(shape, 'right');
+    expect(rightInline).toEqual(rightOriginal);
+
+    const bottomInline = calculateAnchor(shape.x, shape.y, shape.width, shape.height, 'bottom');
+    const bottomOriginal = getAnchorPoint(shape, 'bottom');
+    expect(bottomInline).toEqual(bottomOriginal);
+
+    const leftInline = calculateAnchor(shape.x, shape.y, shape.width, shape.height, 'left');
+    const leftOriginal = getAnchorPoint(shape, 'left');
+    expect(leftInline).toEqual(leftOriginal);
+  });
+
+  it('should calculate correct anchors during simulated drag updates', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    // Create connector
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    // Simulate rapid position updates during drag
+    const dragPositions = [
+      { x: 110, y: 105 },
+      { x: 120, y: 110 },
+      { x: 130, y: 115 },
+      { x: 140, y: 120 },
+      { x: 150, y: 125 },
+    ];
+
+    for (const pos of dragPositions) {
+      store.updateShape(shape1.id, { x: pos.x, y: pos.y });
+
+      const updatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape1.id)!;
+      const expectedRightAnchor = { x: pos.x + 100, y: pos.y + 50 };
+      const actualAnchor = getAnchorPoint(updatedShape, 'right');
+
+      expect(actualAnchor).toEqual(expectedRightAnchor);
+    }
+  });
+
+  it('should maintain connector integrity through shape position changes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    // Move shape1 multiple times
+    store.updateShape(shape1.id, { x: 50, y: 50 });
+    store.updateShape(shape1.id, { x: 80, y: 80 });
+    store.updateShape(shape1.id, { x: 120, y: 120 });
+
+    const state = useDiagramStore.getState();
+    expect(state.connectors).toHaveLength(1);
+
+    // Verify connector still references correct shapes
+    const connector = state.connectors[0];
+    expect(connector.fromShapeId).toBe(shape1.id);
+    expect(connector.toShapeId).toBe(shape2.id);
+    expect(connector.fromAnchor).toBe('right');
+    expect(connector.toAnchor).toBe('left');
+  });
+
+  it('should calculate K8s shape anchors correctly during drag', () => {
+    const store = useDiagramStore.getState();
+    const pod = store.addShape('k8s-pod', 100, 100); // 80x80 default size
+
+    const calculateAnchor = (x: number, y: number, width: number, height: number, anchor: string) => ({
+      x: x + (anchor === 'left' ? 0 : anchor === 'right' ? width : width / 2),
+      y: y + (anchor === 'top' ? 0 : anchor === 'bottom' ? height : height / 2),
+    });
+
+    // Simulate drag to new position
+    store.updateShape(pod.id, { x: 200, y: 200 });
+
+    const updatedPod = useDiagramStore.getState().shapes.find(s => s.id === pod.id)!;
+
+    // K8s pod has 80x80 dimensions
+    expect(calculateAnchor(200, 200, 80, 80, 'right')).toEqual({ x: 280, y: 240 });
+    expect(getAnchorPoint(updatedPod, 'right')).toEqual({ x: 280, y: 240 });
+  });
+
+  it('should handle both connected shapes moving', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    // Move both shapes
+    store.updateShape(shape1.id, { x: 50, y: 150 });
+    store.updateShape(shape2.id, { x: 350, y: 150 });
+
+    const state = useDiagramStore.getState();
+    const s1 = state.shapes.find(s => s.id === shape1.id)!;
+    const s2 = state.shapes.find(s => s.id === shape2.id)!;
+
+    // Verify anchor positions are correct
+    expect(getAnchorPoint(s1, 'right')).toEqual({ x: 150, y: 200 }); // 50+100, 150+50
+    expect(getAnchorPoint(s2, 'left')).toEqual({ x: 350, y: 200 }); // 350, 150+50
+  });
+});
+
 describe('K8s shape resize behavior', () => {
   beforeEach(() => {
     useDiagramStore.setState({

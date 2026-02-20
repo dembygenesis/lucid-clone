@@ -514,8 +514,37 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
 
     if (!fromShape || !toShape) return null;
 
-    const from = getAnchorPoint(fromShape, connector.fromAnchor);
-    const to = getAnchorPoint(toShape, connector.toAnchor);
+    // Get actual node positions from Konva stage for real-time accuracy during drag
+    // This ensures connectors follow the visual position, not just the store position
+    const stage = stageRef.current;
+    let fromX = fromShape.x;
+    let fromY = fromShape.y;
+    let toX = toShape.x;
+    let toY = toShape.y;
+
+    if (stage) {
+      const fromNode = stage.findOne(`#shape-${connector.fromShapeId}`);
+      const toNode = stage.findOne(`#shape-${connector.toShapeId}`);
+
+      if (fromNode) {
+        fromX = fromNode.x();
+        fromY = fromNode.y();
+      }
+      if (toNode) {
+        toX = toNode.x();
+        toY = toNode.y();
+      }
+    }
+
+    // Calculate anchor points using actual node positions
+    const from = {
+      x: fromX + (connector.fromAnchor === 'left' ? 0 : connector.fromAnchor === 'right' ? fromShape.width : fromShape.width / 2),
+      y: fromY + (connector.fromAnchor === 'top' ? 0 : connector.fromAnchor === 'bottom' ? fromShape.height : fromShape.height / 2),
+    };
+    const to = {
+      x: toX + (connector.toAnchor === 'left' ? 0 : connector.toAnchor === 'right' ? toShape.width : toShape.width / 2),
+      y: toY + (connector.toAnchor === 'top' ? 0 : connector.toAnchor === 'bottom' ? toShape.height : toShape.height / 2),
+    };
     const isSelected = selectedConnectorIds.includes(connector.id);
 
     let points: number[] = [];
@@ -561,7 +590,24 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     const fromShape = shapes.find((s) => s.id === connectionState.fromShapeId);
     if (!fromShape) return null;
 
-    const from = getAnchorPoint(fromShape, connectionState.fromAnchor);
+    // Get actual node position from Konva stage for real-time accuracy
+    const stage = stageRef.current;
+    let fromX = fromShape.x;
+    let fromY = fromShape.y;
+
+    if (stage) {
+      const fromNode = stage.findOne(`#shape-${connectionState.fromShapeId}`);
+      if (fromNode) {
+        fromX = fromNode.x();
+        fromY = fromNode.y();
+      }
+    }
+
+    // Calculate anchor point using actual node position
+    const from = {
+      x: fromX + (connectionState.fromAnchor === 'left' ? 0 : connectionState.fromAnchor === 'right' ? fromShape.width : fromShape.width / 2),
+      y: fromY + (connectionState.fromAnchor === 'top' ? 0 : connectionState.fromAnchor === 'bottom' ? fromShape.height : fromShape.height / 2),
+    };
 
     return (
       <Line
