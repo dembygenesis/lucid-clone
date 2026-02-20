@@ -508,6 +508,106 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     }
   };
 
+  // Calculate optimal anchors based on relative shape positions
+  const calculateOptimalAnchors = (
+    fromX: number, fromY: number, fromWidth: number, fromHeight: number,
+    toX: number, toY: number, toWidth: number, toHeight: number
+  ): { fromAnchor: AnchorPosition; toAnchor: AnchorPosition } => {
+    // Calculate shape centers
+    const fromCenterX = fromX + fromWidth / 2;
+    const fromCenterY = fromY + fromHeight / 2;
+    const toCenterX = toX + toWidth / 2;
+    const toCenterY = toY + toHeight / 2;
+
+    // Calculate direction vector
+    const dx = toCenterX - fromCenterX;
+    const dy = toCenterY - fromCenterY;
+
+    // Determine primary direction (horizontal or vertical)
+    const isHorizontal = Math.abs(dx) > Math.abs(dy);
+
+    let fromAnchor: AnchorPosition;
+    let toAnchor: AnchorPosition;
+
+    if (isHorizontal) {
+      // Shapes are more horizontally separated
+      if (dx > 0) {
+        // To shape is to the right
+        fromAnchor = 'right';
+        toAnchor = 'left';
+      } else {
+        // To shape is to the left
+        fromAnchor = 'left';
+        toAnchor = 'right';
+      }
+    } else {
+      // Shapes are more vertically separated
+      if (dy > 0) {
+        // To shape is below
+        fromAnchor = 'bottom';
+        toAnchor = 'top';
+      } else {
+        // To shape is above
+        fromAnchor = 'top';
+        toAnchor = 'bottom';
+      }
+    }
+
+    return { fromAnchor, toAnchor };
+  };
+
+  // Calculate anchor point coordinates
+  const getAnchorCoords = (
+    x: number, y: number, width: number, height: number, anchor: AnchorPosition
+  ): { x: number; y: number } => {
+    switch (anchor) {
+      case 'top': return { x: x + width / 2, y };
+      case 'right': return { x: x + width, y: y + height / 2 };
+      case 'bottom': return { x: x + width / 2, y: y + height };
+      case 'left': return { x, y: y + height / 2 };
+    }
+  };
+
+  // Generate smart elbow path that avoids going through shapes
+  const generateElbowPath = (
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    fromAnchor: AnchorPosition,
+    toAnchor: AnchorPosition
+  ): number[] => {
+    const MARGIN = 20; // Minimum distance from shape edges
+
+    // For horizontal anchors (left/right)
+    if (fromAnchor === 'left' || fromAnchor === 'right') {
+      if (toAnchor === 'left' || toAnchor === 'right') {
+        // Both horizontal - use midpoint
+        const midX = (from.x + to.x) / 2;
+        return [from.x, from.y, midX, from.y, midX, to.y, to.x, to.y];
+      } else {
+        // From horizontal, to vertical
+        // Go out horizontally first, then vertically
+        const extendX = fromAnchor === 'right'
+          ? Math.max(from.x + MARGIN, to.x)
+          : Math.min(from.x - MARGIN, to.x);
+        return [from.x, from.y, extendX, from.y, extendX, to.y, to.x, to.y];
+      }
+    } else {
+      // For vertical anchors (top/bottom)
+      if (toAnchor === 'top' || toAnchor === 'bottom') {
+        // Both vertical - use midpoint
+        const midY = (from.y + to.y) / 2;
+        return [from.x, from.y, from.x, midY, to.x, midY, to.x, to.y];
+      } else {
+        // From vertical, to horizontal
+        // Go out vertically first, then horizontally
+        const extendY = fromAnchor === 'bottom'
+          ? Math.max(from.y + MARGIN, to.y)
+          : Math.min(from.y - MARGIN, to.y);
+        return [from.x, from.y, from.x, extendY, to.x, extendY, to.x, to.y];
+      }
+    }
+  };
+
   const renderConnector = (connector: Connector) => {
     const fromShape = shapes.find((s) => s.id === connector.fromShapeId);
     const toShape = shapes.find((s) => s.id === connector.toShapeId);
@@ -515,7 +615,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     if (!fromShape || !toShape) return null;
 
     // Get actual node positions from Konva stage for real-time accuracy during drag
-    // This ensures connectors follow the visual position, not just the store position
     const stage = stageRef.current;
     let fromX = fromShape.x;
     let fromY = fromShape.y;
@@ -536,29 +635,24 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
-    // Calculate anchor points using actual node positions
-    const from = {
-      x: fromX + (connector.fromAnchor === 'left' ? 0 : connector.fromAnchor === 'right' ? fromShape.width : fromShape.width / 2),
-      y: fromY + (connector.fromAnchor === 'top' ? 0 : connector.fromAnchor === 'bottom' ? fromShape.height : fromShape.height / 2),
-    };
-    const to = {
-      x: toX + (connector.toAnchor === 'left' ? 0 : connector.toAnchor === 'right' ? toShape.width : toShape.width / 2),
-      y: toY + (connector.toAnchor === 'top' ? 0 : connector.toAnchor === 'bottom' ? toShape.height : toShape.height / 2),
-    };
+    // Calculate optimal anchors based on current positions (dynamic routing)
+    const { fromAnchor, toAnchor } = calculateOptimalAnchors(
+      fromX, fromY, fromShape.width, fromShape.height,
+      toX, toY, toShape.width, toShape.height
+    );
+
+    // Calculate anchor point coordinates
+    const from = getAnchorCoords(fromX, fromY, fromShape.width, fromShape.height, fromAnchor);
+    const to = getAnchorCoords(toX, toY, toShape.width, toShape.height, toAnchor);
+
     const isSelected = selectedConnectorIds.includes(connector.id);
 
     let points: number[] = [];
 
     if (connector.style === 'elbow') {
-      const midX = (from.x + to.x) / 2;
-      const midY = (from.y + to.y) / 2;
-
-      if (connector.fromAnchor === 'left' || connector.fromAnchor === 'right') {
-        points = [from.x, from.y, midX, from.y, midX, to.y, to.x, to.y];
-      } else {
-        points = [from.x, from.y, from.x, midY, to.x, midY, to.x, to.y];
-      }
+      points = generateElbowPath(from, to, fromAnchor, toAnchor);
     } else {
+      // Straight line
       points = [from.x, from.y, to.x, to.y];
     }
 

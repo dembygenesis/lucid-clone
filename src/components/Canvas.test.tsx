@@ -1179,6 +1179,153 @@ describe('Connector anchor calculations during drag', () => {
   });
 });
 
+describe('Dynamic connector anchor switching', () => {
+  // Test the logic that dynamically selects optimal anchors based on shape positions
+
+  // Helper function to calculate optimal anchors (mirrors Canvas.tsx implementation)
+  const calculateOptimalAnchors = (
+    fromX: number, fromY: number, fromWidth: number, fromHeight: number,
+    toX: number, toY: number, toWidth: number, toHeight: number
+  ) => {
+    const fromCenterX = fromX + fromWidth / 2;
+    const fromCenterY = fromY + fromHeight / 2;
+    const toCenterX = toX + toWidth / 2;
+    const toCenterY = toY + toHeight / 2;
+
+    const dx = toCenterX - fromCenterX;
+    const dy = toCenterY - fromCenterY;
+
+    const isHorizontal = Math.abs(dx) > Math.abs(dy);
+
+    if (isHorizontal) {
+      return dx > 0
+        ? { fromAnchor: 'right', toAnchor: 'left' }
+        : { fromAnchor: 'left', toAnchor: 'right' };
+    } else {
+      return dy > 0
+        ? { fromAnchor: 'bottom', toAnchor: 'top' }
+        : { fromAnchor: 'top', toAnchor: 'bottom' };
+    }
+  };
+
+  it('should select right→left anchors when to-shape is to the right', () => {
+    const result = calculateOptimalAnchors(
+      100, 100, 100, 100,  // from shape at (100, 100) size 100x100
+      300, 100, 100, 100   // to shape at (300, 100) - to the right
+    );
+
+    expect(result.fromAnchor).toBe('right');
+    expect(result.toAnchor).toBe('left');
+  });
+
+  it('should select left→right anchors when to-shape is to the left', () => {
+    const result = calculateOptimalAnchors(
+      300, 100, 100, 100,  // from shape at (300, 100)
+      100, 100, 100, 100   // to shape at (100, 100) - to the left
+    );
+
+    expect(result.fromAnchor).toBe('left');
+    expect(result.toAnchor).toBe('right');
+  });
+
+  it('should select bottom→top anchors when to-shape is below', () => {
+    const result = calculateOptimalAnchors(
+      100, 100, 100, 100,  // from shape at (100, 100)
+      100, 300, 100, 100   // to shape at (100, 300) - below
+    );
+
+    expect(result.fromAnchor).toBe('bottom');
+    expect(result.toAnchor).toBe('top');
+  });
+
+  it('should select top→bottom anchors when to-shape is above', () => {
+    const result = calculateOptimalAnchors(
+      100, 300, 100, 100,  // from shape at (100, 300)
+      100, 100, 100, 100   // to shape at (100, 100) - above
+    );
+
+    expect(result.fromAnchor).toBe('top');
+    expect(result.toAnchor).toBe('bottom');
+  });
+
+  it('should switch anchors when shape crosses to other side horizontally', () => {
+    // Initially to-shape is to the right
+    let result = calculateOptimalAnchors(
+      100, 100, 100, 100,
+      300, 100, 100, 100
+    );
+    expect(result.fromAnchor).toBe('right');
+    expect(result.toAnchor).toBe('left');
+
+    // After dragging to-shape to the left
+    result = calculateOptimalAnchors(
+      100, 100, 100, 100,
+      -100, 100, 100, 100  // now to the left of from-shape
+    );
+    expect(result.fromAnchor).toBe('left');
+    expect(result.toAnchor).toBe('right');
+  });
+
+  it('should switch anchors when shape crosses to other side vertically', () => {
+    // Initially to-shape is below
+    let result = calculateOptimalAnchors(
+      100, 100, 100, 100,
+      100, 300, 100, 100
+    );
+    expect(result.fromAnchor).toBe('bottom');
+    expect(result.toAnchor).toBe('top');
+
+    // After dragging to-shape above
+    result = calculateOptimalAnchors(
+      100, 100, 100, 100,
+      100, -100, 100, 100  // now above from-shape
+    );
+    expect(result.fromAnchor).toBe('top');
+    expect(result.toAnchor).toBe('bottom');
+  });
+
+  it('should prefer horizontal anchors for diagonally placed shapes with more horizontal distance', () => {
+    const result = calculateOptimalAnchors(
+      100, 100, 100, 100,
+      400, 200, 100, 100  // more horizontal than vertical distance
+    );
+
+    expect(result.fromAnchor).toBe('right');
+    expect(result.toAnchor).toBe('left');
+  });
+
+  it('should prefer vertical anchors for diagonally placed shapes with more vertical distance', () => {
+    const result = calculateOptimalAnchors(
+      100, 100, 100, 100,
+      200, 400, 100, 100  // more vertical than horizontal distance
+    );
+
+    expect(result.fromAnchor).toBe('bottom');
+    expect(result.toAnchor).toBe('top');
+  });
+
+  it('should handle K8s shapes with different dimensions', () => {
+    // K8s pod is 80x80
+    const result = calculateOptimalAnchors(
+      100, 100, 80, 80,  // Pod
+      300, 100, 80, 80   // Service to the right
+    );
+
+    expect(result.fromAnchor).toBe('right');
+    expect(result.toAnchor).toBe('left');
+  });
+
+  it('should handle shapes of different sizes', () => {
+    const result = calculateOptimalAnchors(
+      100, 100, 50, 50,   // small shape
+      300, 100, 200, 200  // large shape to the right
+    );
+
+    expect(result.fromAnchor).toBe('right');
+    expect(result.toAnchor).toBe('left');
+  });
+});
+
 describe('K8s shape resize behavior', () => {
   beforeEach(() => {
     useDiagramStore.setState({

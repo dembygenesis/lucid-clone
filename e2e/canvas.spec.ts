@@ -670,6 +670,104 @@ test.describe('Real-time Connector Updates', () => {
     await page.waitForTimeout(200);
     await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
   });
+
+  test('should dynamically switch connector anchors when shape crosses to other side', async ({ page }) => {
+    // Create two rectangles side by side
+    // Shape 1: center at 350,350
+    // Shape 2: center at 600,350
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 300, 300);
+    await page.waitForTimeout(200);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 550, 300);
+    await page.waitForTimeout(200);
+
+    // Create connector between them using connector tool
+    await page.getByTitle('Connector (C)').click();
+    await page.waitForTimeout(100);
+
+    // Start from right anchor of first shape
+    await clickCanvas(page, 400, 350);
+    await page.waitForTimeout(200);
+
+    if (await page.locator('text=Drawing connection').isVisible()) {
+      // Complete to left anchor of second shape
+      await clickCanvas(page, 550, 350);
+      await page.waitForTimeout(300);
+    }
+
+    // Screenshot initial state (connector goes right to left)
+    await page.screenshot({ path: 'e2e/screenshots/connector-before-crossover.png' });
+
+    // Now drag the first shape to the RIGHT of the second shape
+    // This should cause the connector to switch anchors
+    await page.getByTitle('Select (V)').click();
+    await page.waitForTimeout(100);
+
+    await clickCanvas(page, 350, 350);
+    await page.waitForTimeout(100);
+
+    // Drag shape1 to the far right (past shape2)
+    await dragOnCanvas(page, 350, 350, 750, 350);
+    await page.waitForTimeout(300);
+
+    // Screenshot after crossover (connector should now go from left to right)
+    await page.screenshot({ path: 'e2e/screenshots/connector-after-crossover.png' });
+
+    // Both shapes should still be selectable
+    await clickCanvas(page, 750, 350);
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    await clickCanvas(page, 600, 350);
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
+
+  test('should handle vertical crossover', async ({ page }) => {
+    // Create two rectangles vertically stacked
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 400, 200);
+    await page.waitForTimeout(200);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 400, 400);
+    await page.waitForTimeout(200);
+
+    // Create connector from bottom of shape1 to top of shape2
+    await page.getByTitle('Connector (C)').click();
+    await page.waitForTimeout(100);
+
+    // Start from bottom anchor of first shape
+    await clickCanvas(page, 450, 300);
+    await page.waitForTimeout(200);
+
+    if (await page.locator('text=Drawing connection').isVisible()) {
+      // Complete to top anchor of second shape
+      await clickCanvas(page, 450, 400);
+      await page.waitForTimeout(300);
+    }
+
+    await page.screenshot({ path: 'e2e/screenshots/connector-vertical-before.png' });
+
+    // Drag shape1 below shape2
+    await page.getByTitle('Select (V)').click();
+    await page.waitForTimeout(100);
+
+    await clickCanvas(page, 450, 250);
+    await page.waitForTimeout(100);
+
+    await dragOnCanvas(page, 450, 250, 450, 550);
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: 'e2e/screenshots/connector-vertical-after.png' });
+
+    // Shapes should still be selectable
+    await clickCanvas(page, 450, 550);
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
 });
 
 test.describe('Multiple Shape Operations', () => {
