@@ -17,13 +17,15 @@ import { getK8sIconPath, K8S_LABELS } from './K8sIcons';
 interface CanvasProps {
   width: number;
   height: number;
+  stageRef?: React.RefObject<Konva.Stage>;
 }
 
 const ANCHOR_RADIUS = 6;
 const ANCHOR_HIT_RADIUS = 12;
 
-export function Canvas({ width, height }: CanvasProps) {
-  const stageRef = useRef<Konva.Stage>(null);
+export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProps) {
+  const internalStageRef = useRef<Konva.Stage>(null);
+  const stageRef = externalStageRef || internalStageRef;
   const transformerRef = useRef<Konva.Transformer>(null);
 
   const {

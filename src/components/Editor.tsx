@@ -1,10 +1,13 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import Konva from 'konva';
 import { Canvas } from './Canvas';
 import { Toolbar } from './Toolbar';
 import { K8sSidebar } from './K8sSidebar';
+import { PropertiesPanel } from './PropertiesPanel';
+import { ExportMenu } from './ExportMenu';
 import { useDiagramStore } from '../store';
-import { getDiagram, saveDiagram, createDiagram } from '../utils/db';
+import { diagramService, saveDiagramWithThumbnail } from '../services';
 import { isK8sShape, K8sShapeType } from '../types';
 
 export function Editor() {
@@ -12,6 +15,7 @@ export function Editor() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const stageRef = useRef<Konva.Stage>(null);
 
   const {
     diagramId,
@@ -19,6 +23,7 @@ export function Editor() {
     shapes,
     connectors,
     settings,
+    selectedShapeIds,
     setDiagram,
     setDiagramName,
     addShape,
@@ -32,13 +37,13 @@ export function Editor() {
       setLoading(true);
       try {
         if (id === 'new') {
-          const diagram = await createDiagram();
+          const diagram = await diagramService.create();
           navigate(`/edit/${diagram.id}`, { replace: true });
           return;
         }
 
         if (id) {
-          const diagram = await getDiagram(id);
+          const diagram = await diagramService.get(id);
           if (diagram) {
             setDiagram(
               diagram.id,
@@ -58,20 +63,23 @@ export function Editor() {
     load();
   }, [id, navigate, setDiagram]);
 
-  // Auto-save
+  // Auto-save with thumbnail
   useEffect(() => {
     if (!diagramId || loading) return;
 
     const timeout = setTimeout(() => {
-      saveDiagram({
-        id: diagramId,
-        name: diagramName,
-        shapes,
-        connectors,
-        settings,
-        createdAt: '', // Will be preserved
-        updatedAt: new Date().toISOString(),
-      });
+      saveDiagramWithThumbnail(
+        {
+          id: diagramId,
+          name: diagramName,
+          shapes,
+          connectors,
+          settings,
+          createdAt: '', // Will be preserved
+          updatedAt: new Date().toISOString(),
+        },
+        stageRef.current || undefined
+      );
     }, 1000);
 
     return () => clearTimeout(timeout);
@@ -195,7 +203,9 @@ export function Editor() {
 
       <Toolbar />
       <K8sSidebar />
-      <Canvas width={dimensions.width} height={dimensions.height} />
+      <ExportMenu diagramId={diagramId} stageRef={stageRef} />
+      {selectedShapeIds.length > 0 && <PropertiesPanel />}
+      <Canvas width={dimensions.width} height={dimensions.height} stageRef={stageRef} />
     </div>
   );
 }

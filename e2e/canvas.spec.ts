@@ -619,6 +619,94 @@ test.describe('K8s Shape Resize', () => {
   });
 });
 
+test.describe('Export Menu', () => {
+  test('should show export menu button', async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Export button should be visible in top-right
+    const exportButton = page.locator('button[title="Export"]');
+    await expect(exportButton).toBeVisible();
+  });
+
+  test('should open export menu on click', async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Click export button
+    await page.locator('button[title="Export"]').click();
+    await page.waitForTimeout(200);
+
+    // Menu should show PNG and JSON options
+    await expect(page.locator('text=Export as PNG')).toBeVisible();
+    await expect(page.locator('text=Export as JSON')).toBeVisible();
+  });
+});
+
+test.describe('Properties Panel', () => {
+  test('should show properties panel when shape is selected', async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create a rectangle
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 400, 300);
+    await page.waitForTimeout(300);
+
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(300);
+
+    // Properties panel should be visible
+    await expect(page.locator('text=Properties')).toBeVisible();
+    await expect(page.locator('text=Fill Color')).toBeVisible();
+    await expect(page.locator('text=Stroke Color')).toBeVisible();
+  });
+
+  test('should hide properties panel when no shape selected', async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // No shapes, no properties panel
+    await expect(page.locator('text=Properties')).not.toBeVisible();
+  });
+});
+
+test.describe('Dashboard', () => {
+  test('should show dashboard with create button', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForTimeout(500);
+
+    // Should show title and create button
+    await expect(page.locator('text=Lucid Clone')).toBeVisible();
+    await expect(page.locator('text=+ New Diagram')).toBeVisible();
+  });
+
+  test('should show import button', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForTimeout(500);
+
+    await expect(page.locator('text=Import JSON')).toBeVisible();
+  });
+
+  test('should create new diagram on button click', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForTimeout(500);
+
+    // Click create button
+    await page.locator('text=+ New Diagram').click();
+    await page.waitForTimeout(1000);
+
+    // Should navigate to editor
+    await expect(page).toHaveURL(/\/edit\//);
+    await expect(page.locator('canvas')).toBeVisible();
+  });
+});
+
 test.describe('Quick-create connected shapes', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/edit/new');

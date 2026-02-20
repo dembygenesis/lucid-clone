@@ -83,6 +83,7 @@ export interface DiagramListItem {
   id: string;
   name: string;
   updatedAt: string;
+  thumbnail?: string;
 }
 
 export type Tool =

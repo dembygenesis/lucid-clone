@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DiagramListItem } from '../types';
-import { listDiagrams, deleteDiagram, createDiagram } from '../utils/db';
+import { diagramService } from '../services';
 
 export function Dashboard() {
   const [diagrams, setDiagrams] = useState<DiagramListItem[]>([]);
@@ -15,7 +15,7 @@ export function Dashboard() {
   async function loadDiagrams() {
     setLoading(true);
     try {
-      const list = await listDiagrams();
+      const list = await diagramService.list();
       setDiagrams(list);
     } finally {
       setLoading(false);
@@ -23,16 +23,35 @@ export function Dashboard() {
   }
 
   async function handleCreate() {
-    const diagram = await createDiagram();
+    const diagram = await diagramService.create();
     navigate(`/edit/${diagram.id}`);
   }
 
   async function handleDelete(id: string, e: React.MouseEvent) {
     e.stopPropagation();
     if (confirm('Delete this diagram?')) {
-      await deleteDiagram(id);
+      await diagramService.delete(id);
       loadDiagrams();
     }
+  }
+
+  async function handleImport() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const text = await file.text();
+        try {
+          const diagram = await diagramService.importJSON(text);
+          navigate(`/edit/${diagram.id}`);
+        } catch (err) {
+          alert('Failed to import diagram. Invalid file format.');
+        }
+      }
+    };
+    input.click();
   }
 
   function formatDate(dateString: string): string {
@@ -68,24 +87,48 @@ export function Dashboard() {
           <h1 style={{ fontSize: 28, fontWeight: 700, color: '#111827', margin: 0 }}>
             Lucid Clone
           </h1>
-          <button
-            onClick={handleCreate}
-            style={{
-              padding: '12px 24px',
-              fontSize: 16,
-              fontWeight: 500,
-              color: 'white',
-              backgroundColor: '#4f46e5',
-              border: 'none',
-              borderRadius: 8,
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-            onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#4338ca')}
-            onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#4f46e5')}
-          >
-            + New Diagram
-          </button>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              onClick={handleImport}
+              style={{
+                padding: '12px 24px',
+                fontSize: 16,
+                fontWeight: 500,
+                color: '#4f46e5',
+                backgroundColor: 'white',
+                border: '2px solid #4f46e5',
+                borderRadius: 8,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = '#eef2ff';
+              }}
+              onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = 'white';
+              }}
+            >
+              Import JSON
+            </button>
+            <button
+              onClick={handleCreate}
+              style={{
+                padding: '12px 24px',
+                fontSize: 16,
+                fontWeight: 500,
+                color: 'white',
+                backgroundColor: '#4f46e5',
+                border: 'none',
+                borderRadius: 8,
+                cursor: 'pointer',
+                transition: 'background-color 0.15s ease',
+              }}
+              onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#4338ca')}
+              onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#4f46e5')}
+            >
+              + New Diagram
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -175,9 +218,22 @@ export function Dashboard() {
                     justifyContent: 'center',
                     fontSize: 40,
                     color: '#9ca3af',
+                    overflow: 'hidden',
                   }}
                 >
-                  ◇
+                  {diagram.thumbnail ? (
+                    <img
+                      src={diagram.thumbnail}
+                      alt={diagram.name}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
+                      }}
+                    />
+                  ) : (
+                    '◇'
+                  )}
                 </div>
                 <h3
                   style={{
