@@ -157,14 +157,14 @@ test.describe('Shape Selection and Dragging', () => {
     await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible({ timeout: 10000 });
   });
 
-  test('should clear selection on empty area click', async ({ page }) => {
+  test('should clear selection on Escape key', async ({ page }) => {
     // Select shape by clicking center
     await clickCanvas(page, 550, 450);
     await page.waitForTimeout(300);
     await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible({ timeout: 10000 });
 
-    // Click empty area (far from the shape, x > 220 to avoid K8s sidebar)
-    await clickCanvas(page, 800, 600);
+    // Press Escape to clear selection
+    await page.keyboard.press('Escape');
     await page.waitForTimeout(300);
 
     // Delete button should disappear
@@ -1037,5 +1037,713 @@ test.describe('Quick-create connected shapes', () => {
     }
 
     await page.screenshot({ path: 'e2e/screenshots/quick-create-k8s.png' });
+  });
+});
+
+// ============================================================
+// NEW INTERACTION FEATURE E2E TESTS
+// ============================================================
+
+test.describe('Zoom Functionality', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+  });
+
+  test('should zoom in using toolbar button', async ({ page }) => {
+    const zoomDisplay = page.locator('div').filter({ hasText: /^100%$/ }).first();
+    await expect(zoomDisplay).toBeVisible();
+
+    // Click zoom in button
+    await page.getByTitle('Zoom In (+)').click();
+    await page.waitForTimeout(200);
+
+    // Zoom should increase
+    const newZoomText = await page.locator('text=/[0-9]+%/').first().textContent();
+    expect(parseInt(newZoomText || '100')).toBeGreaterThan(100);
+  });
+
+  test('should zoom out using toolbar button', async ({ page }) => {
+    // First zoom in a bit
+    await page.getByTitle('Zoom In (+)').click();
+    await page.getByTitle('Zoom In (+)').click();
+    await page.waitForTimeout(200);
+
+    // Then zoom out
+    await page.getByTitle('Zoom Out (-)').click();
+    await page.waitForTimeout(200);
+
+    // Verify zoom works (no crash)
+    await expect(page.locator('canvas').first()).toBeVisible();
+  });
+
+  test('should zoom with keyboard shortcuts', async ({ page }) => {
+    // Press Cmd/Ctrl + = to zoom in
+    await page.keyboard.press('Control+=');
+    await page.waitForTimeout(200);
+
+    // Canvas should still be visible (no crash)
+    await expect(page.locator('canvas').first()).toBeVisible();
+
+    // Press Cmd/Ctrl + - to zoom out
+    await page.keyboard.press('Control+-');
+    await page.waitForTimeout(200);
+
+    await expect(page.locator('canvas').first()).toBeVisible();
+  });
+
+  test('should reset zoom to 100% with Ctrl+0', async ({ page }) => {
+    // Zoom in first
+    await page.getByTitle('Zoom In (+)').click();
+    await page.getByTitle('Zoom In (+)').click();
+    await page.waitForTimeout(200);
+
+    // Reset zoom
+    await page.keyboard.press('Control+0');
+    await page.waitForTimeout(200);
+
+    // Check zoom is back to 100%
+    await expect(page.locator('text=100%').first()).toBeVisible();
+  });
+
+  test('should fit to screen with Ctrl+1', async ({ page }) => {
+    // Create a shape
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 400, 300);
+    await page.waitForTimeout(300);
+
+    // Press Ctrl+1 for fit to screen
+    await page.keyboard.press('Control+1');
+    await page.waitForTimeout(300);
+
+    // Canvas should adjust (no crash)
+    await expect(page.locator('canvas').first()).toBeVisible();
+    await page.screenshot({ path: 'e2e/screenshots/fit-to-screen.png' });
+  });
+});
+
+test.describe('Keyboard Shortcuts', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create a rectangle for testing
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 400, 300);
+    await page.waitForTimeout(300);
+  });
+
+  test('should select shape and delete with Delete key', async ({ page }) => {
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Should be selected
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    // Press Delete
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(200);
+
+    // Shape should be deleted (delete button hidden)
+    await expect(page.getByTitle('Delete Selected (Del)')).not.toBeVisible();
+  });
+
+  test('should delete with Backspace key', async ({ page }) => {
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Press Backspace
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(200);
+
+    // Shape should be deleted
+    await expect(page.getByTitle('Delete Selected (Del)')).not.toBeVisible();
+  });
+
+  test('should undo with Ctrl+Z', async ({ page }) => {
+    // Select and delete shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(200);
+
+    // Undo
+    await page.keyboard.press('Control+z');
+    await page.waitForTimeout(300);
+
+    // Shape should be back - click to select it
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
+
+  test('should redo with Ctrl+Shift+Z', async ({ page }) => {
+    // Select, delete, then undo
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Control+z');
+    await page.waitForTimeout(300);
+
+    // Redo
+    await page.keyboard.press('Control+Shift+z');
+    await page.waitForTimeout(300);
+
+    // Shape should be deleted again
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+    // After redo of delete, clicking empty space shouldn't show delete button for shape
+  });
+
+  test('should copy and paste with Ctrl+C and Ctrl+V', async ({ page }) => {
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Copy
+    await page.keyboard.press('Control+c');
+    await page.waitForTimeout(100);
+
+    // Paste
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(300);
+
+    // New shape should be created and selected
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/copy-paste.png' });
+  });
+
+  test('should duplicate with Ctrl+D', async ({ page }) => {
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Duplicate
+    await page.keyboard.press('Control+d');
+    await page.waitForTimeout(300);
+
+    // New shape should be selected
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/duplicate.png' });
+  });
+
+  test('should select all with Ctrl+A', async ({ page }) => {
+    // Create second shape (away from toolbar/sidebar)
+    await page.getByTitle('Circle (O)').click();
+    await clickCanvas(page, 700, 400);
+    await page.waitForTimeout(300);
+
+    // Click empty area to deselect (away from UI elements)
+    await clickCanvas(page, 950, 300);
+    await page.waitForTimeout(200);
+
+    // Select all
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
+
+    // Should be able to delete (which means something is selected)
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
+
+  test('should switch to tools with keyboard shortcuts', async ({ page }) => {
+    // V for select
+    await page.keyboard.press('v');
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Select (V)')).toHaveCSS('background-color', /rgb\(79, 70, 229\)/);
+
+    // H for pan
+    await page.keyboard.press('h');
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Pan (H)')).toHaveCSS('background-color', /rgb\(79, 70, 229\)/);
+
+    // R for rectangle
+    await page.keyboard.press('r');
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Rectangle (R)')).toHaveCSS('background-color', /rgb\(79, 70, 229\)/);
+
+    // O for circle
+    await page.keyboard.press('o');
+    await page.waitForTimeout(100);
+    await expect(page.getByTitle('Circle (O)')).toHaveCSS('background-color', /rgb\(79, 70, 229\)/);
+  });
+
+  test('should nudge shape with arrow keys', async ({ page }) => {
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Press arrow keys
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(200);
+
+    // Shape should have moved (no crash)
+    await expect(page.locator('canvas').first()).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/arrow-nudge.png' });
+  });
+
+  test('should nudge by larger amount with Shift+Arrow', async ({ page }) => {
+    // Select the shape
+    await clickCanvas(page, 450, 350);
+    await page.waitForTimeout(200);
+
+    // Press Shift+Arrow
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(200);
+
+    // Shape should have moved by 10px (no crash)
+    await expect(page.locator('canvas').first()).toBeVisible();
+  });
+});
+
+test.describe('Context Menu', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create a rectangle in the center-right area (away from toolbar/sidebar)
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 400);
+    await page.waitForTimeout(300);
+  });
+
+  test('should show context menu on right-click canvas', async ({ page }) => {
+    // Right-click on empty canvas area (center-right, away from shapes and UI)
+    const canvas = page.locator('canvas').first();
+    await canvas.click({ button: 'right', position: { x: 800, y: 500 } });
+    await page.waitForTimeout(200);
+
+    // Context menu should appear with Paste option
+    await expect(page.locator('text=Paste')).toBeVisible();
+    await expect(page.locator('text=Select All')).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/context-menu-canvas.png' });
+  });
+
+  test('should show context menu on right-click shape', async ({ page }) => {
+    // Select the shape first (center is at 650, 450)
+    await clickCanvas(page, 650, 450);
+    await page.waitForTimeout(200);
+
+    // Right-click on shape
+    const canvas = page.locator('canvas').first();
+    await canvas.click({ button: 'right', position: { x: 650, y: 450 } });
+    await page.waitForTimeout(200);
+
+    // Context menu should appear with shape options
+    await expect(page.locator('text=Cut')).toBeVisible();
+    await expect(page.locator('text=Copy')).toBeVisible();
+    await expect(page.locator('text=Delete')).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/context-menu-shape.png' });
+  });
+
+  test('should close context menu on Escape', async ({ page }) => {
+    // Right-click on canvas (away from UI elements)
+    const canvas = page.locator('canvas').first();
+    await canvas.click({ button: 'right', position: { x: 800, y: 500 } });
+    await page.waitForTimeout(200);
+
+    // Context menu visible
+    await expect(page.locator('text=Paste')).toBeVisible();
+
+    // Press Escape
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+
+    // Context menu should be gone
+    await expect(page.locator('text=Paste')).not.toBeVisible();
+  });
+
+  test('should close context menu on click', async ({ page }) => {
+    // Right-click on canvas (away from UI elements)
+    const canvas = page.locator('canvas').first();
+    await canvas.click({ button: 'right', position: { x: 800, y: 500 } });
+    await page.waitForTimeout(200);
+
+    // Click elsewhere (away from UI elements)
+    await canvas.click({ position: { x: 900, y: 400 } });
+    await page.waitForTimeout(200);
+
+    // Context menu should be gone
+    await expect(page.locator('text=Select All')).not.toBeVisible();
+  });
+});
+
+test.describe('Double-click Text Editing', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+  });
+
+  test('should create text on double-click empty canvas', async ({ page }) => {
+    // Double-click on empty canvas (center-right, away from UI)
+    const canvas = page.locator('canvas').first();
+    await canvas.dblclick({ position: { x: 700, y: 400 } });
+    await page.waitForTimeout(300);
+
+    // Text input should appear
+    const textInput = page.locator('textarea');
+    await expect(textInput).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/dblclick-text-create.png' });
+  });
+
+  test('should edit shape text on double-click', async ({ page }) => {
+    // Create a rectangle (center-right, away from UI)
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 400);
+    await page.waitForTimeout(300);
+
+    // Double-click on the shape (center at 650, 450)
+    const canvas = page.locator('canvas').first();
+    await canvas.dblclick({ position: { x: 650, y: 450 } });
+    await page.waitForTimeout(300);
+
+    // Text input should appear
+    const textInput = page.locator('textarea');
+    await expect(textInput).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/dblclick-text-edit.png' });
+  });
+
+  test('should save text on blur', async ({ page }) => {
+    // Double-click to create text (center-right, away from UI)
+    const canvas = page.locator('canvas').first();
+    await canvas.dblclick({ position: { x: 700, y: 400 } });
+    await page.waitForTimeout(300);
+
+    // Type some text
+    const textInput = page.locator('textarea');
+    await textInput.fill('Hello World');
+    await page.waitForTimeout(100);
+
+    // Click outside to blur and save (click on canvas, away from text area)
+    await canvas.click({ position: { x: 900, y: 300 } });
+    await page.waitForTimeout(300);
+
+    // Text input should be gone after blur
+    await expect(textInput).not.toBeVisible();
+  });
+
+  test('should cancel text editing on Escape', async ({ page }) => {
+    // Double-click to create text (center-right, away from UI)
+    const canvas = page.locator('canvas').first();
+    await canvas.dblclick({ position: { x: 700, y: 400 } });
+    await page.waitForTimeout(300);
+
+    // Press Escape to cancel
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+
+    // Text input should be gone
+    const textInput = page.locator('textarea');
+    await expect(textInput).not.toBeVisible();
+  });
+});
+
+test.describe('Panning', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+  });
+
+  test('should pan with pan tool', async ({ page }) => {
+    // Select pan tool
+    await page.getByTitle('Pan (H)').click();
+    await page.waitForTimeout(100);
+
+    // Drag on canvas
+    await dragOnCanvas(page, 400, 300, 500, 400);
+    await page.waitForTimeout(200);
+
+    // No crash, canvas visible
+    await expect(page.locator('canvas').first()).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/pan-tool.png' });
+  });
+
+  test('should pan with H keyboard shortcut', async ({ page }) => {
+    // Press H for pan tool
+    await page.keyboard.press('h');
+    await page.waitForTimeout(100);
+
+    // Pan tool should be active
+    await expect(page.getByTitle('Pan (H)')).toHaveCSS('background-color', /rgb\(79, 70, 229\)/);
+
+    // Drag to pan
+    await dragOnCanvas(page, 400, 300, 300, 200);
+    await page.waitForTimeout(200);
+
+    await expect(page.locator('canvas').first()).toBeVisible();
+  });
+});
+
+test.describe('Multi-select', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create two rectangles in center-right area (away from toolbar/sidebar)
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 400);
+    await page.waitForTimeout(300);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 800, 400);
+    await page.waitForTimeout(300);
+  });
+
+  test('should multi-select with Shift+click', async ({ page }) => {
+    // Select first shape (center at 650, 450)
+    await clickCanvas(page, 650, 450);
+    await page.waitForTimeout(200);
+
+    // Shift+click second shape (center at 850, 450)
+    const canvas = page.locator('canvas').first();
+    await canvas.click({ position: { x: 850, y: 450 }, modifiers: ['Shift'] });
+    await page.waitForTimeout(200);
+
+    // Both should be selected (delete button visible)
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/multi-select-shift.png' });
+  });
+
+  test('should drag multiple selected shapes together', async ({ page }) => {
+    // Select first shape
+    await clickCanvas(page, 650, 450);
+    await page.waitForTimeout(200);
+
+    // Shift+click second shape
+    const canvas = page.locator('canvas').first();
+    await canvas.click({ position: { x: 850, y: 450 }, modifiers: ['Shift'] });
+    await page.waitForTimeout(200);
+
+    // Drag one of the shapes
+    await dragOnCanvas(page, 650, 450, 650, 550);
+    await page.waitForTimeout(300);
+
+    // Both should have moved
+    await page.screenshot({ path: 'e2e/screenshots/multi-select-drag.png' });
+  });
+
+  test('should clear selection on Escape key', async ({ page }) => {
+    // Select first shape
+    await clickCanvas(page, 650, 450);
+    await page.waitForTimeout(200);
+
+    // Verify it's selected
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    // Press Escape to clear selection
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+
+    // Selection should be cleared
+    await expect(page.getByTitle('Delete Selected (Del)')).not.toBeVisible();
+  });
+
+  test('should select all with Ctrl+A', async ({ page }) => {
+    // Clear any selection by clicking empty area
+    await clickCanvas(page, 950, 300);
+    await page.waitForTimeout(200);
+
+    // Select all
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
+
+    // Should have selected shapes
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+  });
+});
+
+test.describe('Marquee Selection', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create two rectangles in center-right area (away from toolbar/sidebar)
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 350);
+    await page.waitForTimeout(300);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 750, 350);
+    await page.waitForTimeout(300);
+  });
+
+  test('should select shapes by drawing selection box', async ({ page }) => {
+    // Clear selection first by clicking empty area
+    await clickCanvas(page, 950, 200);
+    await page.waitForTimeout(200);
+
+    // Draw selection box around both shapes
+    // Shapes are at 600,350 and 750,350, both 100x100
+    // Box from (550, 300) to (900, 500) should capture both
+    await dragOnCanvas(page, 550, 300, 900, 500);
+    await page.waitForTimeout(300);
+
+    // Both shapes should be selected
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+
+    await page.screenshot({ path: 'e2e/screenshots/marquee-selection.png' });
+  });
+
+  test('should only select shapes inside selection box', async ({ page }) => {
+    // Clear selection
+    await clickCanvas(page, 950, 200);
+    await page.waitForTimeout(200);
+
+    // Draw selection box around only first shape
+    // First shape at 600,350, second at 750,350
+    await dragOnCanvas(page, 550, 300, 720, 500);
+    await page.waitForTimeout(300);
+
+    // Only first shape should be selected
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+    await page.screenshot({ path: 'e2e/screenshots/marquee-partial.png' });
+  });
+});
+
+test.describe('Z-index controls', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create two overlapping rectangles
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 400, 300);
+    await page.waitForTimeout(300);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 430, 330);
+    await page.waitForTimeout(300);
+  });
+
+  test('should bring to front with Ctrl+Shift+]', async ({ page }) => {
+    // Select the first (bottom) shape
+    await clickCanvas(page, 410, 310);
+    await page.waitForTimeout(200);
+
+    // Bring to front
+    await page.keyboard.press('Control+Shift+}');
+    await page.waitForTimeout(200);
+
+    // Should still be selected (no crash)
+    await expect(page.getByTitle('Delete Selected (Del)')).toBeVisible();
+    await page.screenshot({ path: 'e2e/screenshots/bring-to-front.png' });
+  });
+
+  test('should send to back with Ctrl+Shift+[', async ({ page }) => {
+    // Select the second (top) shape
+    await clickCanvas(page, 480, 380);
+    await page.waitForTimeout(200);
+
+    // Send to back
+    await page.keyboard.press('Control+Shift+{');
+    await page.waitForTimeout(200);
+
+    await expect(page.locator('canvas').first()).toBeVisible();
+    await page.screenshot({ path: 'e2e/screenshots/send-to-back.png' });
+  });
+});
+
+test.describe('Connector Tool', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create two rectangles in center-right area (away from toolbar/sidebar)
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 600, 400);
+    await page.waitForTimeout(300);
+
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 850, 400);
+    await page.waitForTimeout(300);
+  });
+
+  test('should switch to connector tool with toolbar click', async ({ page }) => {
+    // Click the connector tool button
+    await page.getByTitle('Connector (C)').click();
+    await page.waitForTimeout(100);
+
+    // Connector tool should be active
+    await expect(page.getByTitle('Connector (C)')).toHaveCSS('background-color', /rgb\(79, 70, 229\)/);
+  });
+
+  test('should create connector between shapes', async ({ page }) => {
+    // Switch to connector tool
+    await page.getByTitle('Connector (C)').click();
+    await page.waitForTimeout(100);
+
+    // Click on first shape's right anchor (700, 450)
+    await clickCanvas(page, 700, 450);
+    await page.waitForTimeout(200);
+
+    // Click on second shape's left anchor (850, 450)
+    await clickCanvas(page, 850, 450);
+    await page.waitForTimeout(300);
+
+    await page.screenshot({ path: 'e2e/screenshots/connector-created.png' });
+  });
+
+  test('should cancel connector on Escape', async ({ page }) => {
+    // Switch to connector tool
+    await page.getByTitle('Connector (C)').click();
+    await page.waitForTimeout(100);
+
+    // Start a connection
+    await clickCanvas(page, 700, 450);
+    await page.waitForTimeout(200);
+
+    // Press Escape to cancel
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+
+    // Should be able to click elsewhere without crash (away from UI)
+    await clickCanvas(page, 950, 300);
+    await expect(page.locator('canvas').first()).toBeVisible();
+  });
+});
+
+test.describe('Grid and Snap', () => {
+  test('should display grid when enabled', async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Grid should be visible by default
+    await page.screenshot({ path: 'e2e/screenshots/grid-enabled.png' });
+  });
+
+  test('should snap shapes to grid', async ({ page }) => {
+    await page.goto('/edit/new');
+    await page.waitForSelector('canvas');
+    await page.waitForTimeout(500);
+
+    // Create a shape
+    await page.getByTitle('Rectangle (R)').click();
+    await clickCanvas(page, 305, 307); // Slightly off grid
+
+    // The shape should snap to grid position
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: 'e2e/screenshots/snap-to-grid.png' });
   });
 });

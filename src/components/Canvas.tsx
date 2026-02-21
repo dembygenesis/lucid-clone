@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { Stage, Layer, Rect, Circle, Line, Text, Transformer, Group, Arrow, Path } from 'react-konva';
 import { KonvaEventObject } from 'konva/lib/Node';
 import Konva from 'konva';
@@ -8,7 +8,6 @@ import {
   Connector,
   AnchorPosition,
   getShapeAnchors,
-  getAnchorPoint,
   isK8sShape,
   K8sShapeType,
 } from '../types';
@@ -23,10 +22,39 @@ interface CanvasProps {
 const ANCHOR_RADIUS = 6;
 const ANCHOR_HIT_RADIUS = 12;
 
+// Selection box state
+interface SelectionBox {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+}
+
+// Context menu state
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  isCanvasMenu: boolean;
+}
+
 export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProps) {
   const internalStageRef = useRef<Konva.Stage>(null);
   const stageRef = externalStageRef || internalStageRef;
   const transformerRef = useRef<Konva.Transformer>(null);
+  const textEditRef = useRef<HTMLTextAreaElement>(null);
+
+  // Local UI state
+  const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [editingShapeId, setEditingShapeId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0, isCanvasMenu: false });
+  const [isAltDragging, setIsAltDragging] = useState(false);
+
+  // Track previous tool for spacebar pan
+  const previousToolRef = useRef<string>('select');
 
   const {
     shapes,
@@ -45,6 +73,7 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     updateShapes,
     moveSelectedShapes,
     selectShape,
+    selectShapes,
     selectConnector,
     clearSelection,
     setViewPosition,
@@ -64,6 +93,9 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     bringForward,
     sendBackward,
     saveToHistory,
+    copy,
+    paste,
+    duplicate,
   } = useDiagramStore();
 
   // Track drag start positions for multi-select drag
@@ -81,20 +113,71 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     transformerRef.current.getLayer()?.batchDraw();
   }, [selectedShapeIds, shapes]);
 
-  // Get undo/redo/copy/paste/duplicate/selectAll from store
-  const { undo, redo, copy, paste, duplicate, selectAll } = useDiagramStore();
+  // Get undo/redo/selectAll from store
+  const { undo, redo, selectAll } = useDiagramStore();
 
-  // Handle keyboard shortcuts (Lucidchart-like)
+  // Calculate fit to screen zoom and position
+  const fitToScreen = useCallback(() => {
+    if (shapes.length === 0) {
+      setZoom(1);
+      setViewPosition(0, 0);
+      return;
+    }
+
+    // Calculate bounding box of all shapes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    shapes.forEach(shape => {
+      minX = Math.min(minX, shape.x);
+      minY = Math.min(minY, shape.y);
+      maxX = Math.max(maxX, shape.x + shape.width);
+      maxY = Math.max(maxY, shape.y + shape.height);
+    });
+
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+    const padding = 50;
+
+    // Calculate zoom to fit
+    const zoomX = (width - padding * 2) / contentWidth;
+    const zoomY = (height - padding * 2) / contentHeight;
+    const newZoom = Math.min(Math.max(Math.min(zoomX, zoomY), 0.1), 1);
+
+    // Center content
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const newViewX = width / 2 - centerX * newZoom;
+    const newViewY = height / 2 - centerY * newZoom;
+
+    setZoom(newZoom);
+    setViewPosition(newViewX, newViewY);
+  }, [shapes, width, height, setZoom, setViewPosition]);
+
+  // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Skip if typing in input
-      if (document.activeElement?.tagName === 'INPUT') return;
+      // Skip if editing text
+      if (editingShapeId || document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        if (e.key === 'Escape') {
+          setEditingShapeId(null);
+        }
+        return;
+      }
 
       const isMeta = e.metaKey || e.ctrlKey;
 
-      // Escape - cancel connection or clear selection
+      // Spacebar - temporary pan mode
+      if (e.code === 'Space' && !isSpaceDown && !isMeta) {
+        e.preventDefault();
+        setIsSpaceDown(true);
+        previousToolRef.current = activeTool;
+        return;
+      }
+
+      // Escape - cancel connection, clear selection, or close context menu
       if (e.key === 'Escape') {
-        if (connectionState.isConnecting) {
+        if (contextMenu.visible) {
+          setContextMenu({ ...contextMenu, visible: false });
+        } else if (connectionState.isConnecting) {
           cancelConnection();
         } else {
           clearSelection();
@@ -131,6 +214,15 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         return;
       }
 
+      // Ctrl/Cmd + X - Cut
+      if (isMeta && e.key === 'x') {
+        e.preventDefault();
+        copy();
+        deleteSelectedShapes();
+        deleteSelectedConnectors();
+        return;
+      }
+
       // Ctrl/Cmd + V - Paste
       if (isMeta && e.key === 'v') {
         e.preventDefault();
@@ -149,6 +241,34 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       if (isMeta && e.key === 'a') {
         e.preventDefault();
         selectAll();
+        return;
+      }
+
+      // Ctrl/Cmd + 0 - Reset zoom to 100%
+      if (isMeta && e.key === '0') {
+        e.preventDefault();
+        setZoom(1);
+        return;
+      }
+
+      // Ctrl/Cmd + = - Zoom in
+      if (isMeta && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        setZoom(Math.min(zoom * 1.2, 3));
+        return;
+      }
+
+      // Ctrl/Cmd + - - Zoom out
+      if (isMeta && e.key === '-') {
+        e.preventDefault();
+        setZoom(Math.max(zoom / 1.2, 0.1));
+        return;
+      }
+
+      // Ctrl/Cmd + 1 - Fit to screen
+      if (isMeta && e.key === '1') {
+        e.preventDefault();
+        fitToScreen();
         return;
       }
 
@@ -206,27 +326,69 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         return;
       }
 
-      // Tool shortcuts
-      if (e.key === 'v' || e.key === 'V') {
-        setTool('select');
-      } else if (e.key === 'h' || e.key === 'H') {
-        setTool('pan');
-      } else if (e.key === 'c' && !isMeta) {
-        setTool('connector');
-      } else if (e.key === 'r' || e.key === 'R') {
-        setTool('rectangle');
-      } else if (e.key === 'o' || e.key === 'O') {
-        setTool('circle');
-      } else if (e.key === 'd' && !isMeta) {
-        setTool('diamond');
-      } else if (e.key === 't' || e.key === 'T') {
-        setTool('text');
+      // Enter - edit text of selected shape
+      if (e.key === 'Enter' && selectedShapeIds.length === 1) {
+        const shape = shapes.find(s => s.id === selectedShapeIds[0]);
+        if (shape) {
+          e.preventDefault();
+          startTextEditing(shape);
+        }
+        return;
+      }
+
+      // Tool shortcuts (only when not holding modifier keys)
+      if (!isMeta) {
+        if (e.key === 'v' || e.key === 'V') {
+          setTool('select');
+        } else if (e.key === 'h' || e.key === 'H') {
+          setTool('pan');
+        } else if (e.key === 'c') {
+          setTool('connector');
+        } else if (e.key === 'r' || e.key === 'R') {
+          setTool('rectangle');
+        } else if (e.key === 'o' || e.key === 'O') {
+          setTool('circle');
+        } else if (e.key === 'd') {
+          setTool('diamond');
+        } else if (e.key === 't' || e.key === 'T') {
+          setTool('text');
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && isSpaceDown) {
+        setIsSpaceDown(false);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors, undo, redo, copy, paste, duplicate, selectAll, setTool, selectedShapeIds, settings, moveSelectedShapes, saveToHistory, bringForward, sendBackward, bringToFront, sendToBack]);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [connectionState.isConnecting, cancelConnection, clearSelection, deleteSelectedShapes, deleteSelectedConnectors, undo, redo, copy, paste, duplicate, selectAll, setTool, selectedShapeIds, settings, moveSelectedShapes, saveToHistory, bringForward, sendBackward, bringToFront, sendToBack, zoom, setZoom, fitToScreen, isSpaceDown, activeTool, contextMenu, editingShapeId, shapes]);
+
+  // Start text editing
+  const startTextEditing = useCallback((shape: Shape) => {
+    setEditingShapeId(shape.id);
+    setEditingText(shape.text || shape.label || '');
+    setTimeout(() => {
+      textEditRef.current?.focus();
+      textEditRef.current?.select();
+    }, 0);
+  }, []);
+
+  // Finish text editing
+  const finishTextEditing = useCallback(() => {
+    if (editingShapeId) {
+      updateShape(editingShapeId, { text: editingText, label: editingText });
+      saveToHistory();
+      setEditingShapeId(null);
+      setEditingText('');
+    }
+  }, [editingShapeId, editingText, updateShape, saveToHistory]);
 
   const getPointerPosition = useCallback(() => {
     const stage = stageRef.current;
@@ -239,88 +401,220 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     };
   }, [viewPosition, zoom]);
 
+  // Handle stage mouse down for selection box
+  const handleStageMouseDown = useCallback(
+    (e: KonvaEventObject<MouseEvent>) => {
+      // Close context menu
+      if (contextMenu.visible) {
+        setContextMenu({ ...contextMenu, visible: false });
+      }
+
+      // Right click - show context menu
+      if (e.evt.button === 2) {
+        e.evt.preventDefault();
+        const pos = { x: e.evt.clientX, y: e.evt.clientY };
+        const isOnCanvas = e.target === e.target.getStage();
+        setContextMenu({
+          visible: true,
+          x: pos.x,
+          y: pos.y,
+          isCanvasMenu: isOnCanvas,
+        });
+        return;
+      }
+
+      // Middle click - start pan
+      if (e.evt.button === 1) {
+        e.evt.preventDefault();
+        setPanning(true);
+        return;
+      }
+
+      // Start selection box on empty canvas
+      if (e.target === e.target.getStage() && activeTool === 'select' && !isSpaceDown) {
+        const pos = getPointerPosition();
+        setSelectionBox({ startX: pos.x, startY: pos.y, endX: pos.x, endY: pos.y });
+        setIsSelecting(true);
+      }
+    },
+    [activeTool, getPointerPosition, isSpaceDown, contextMenu, setPanning]
+  );
+
   const handleStageClick = useCallback(
     (e: KonvaEventObject<MouseEvent>) => {
       if (e.target === e.target.getStage()) {
         if (connectionState.isConnecting) {
           cancelConnection();
-        } else if (activeTool === 'select') {
+        } else if (activeTool === 'select' && !isSelecting) {
           clearSelection();
-        } else if (activeTool !== 'pan' && activeTool !== 'connector') {
+        } else if (activeTool !== 'pan' && activeTool !== 'connector' && activeTool !== 'select') {
           const pos = getPointerPosition();
           addShape(activeTool, pos.x, pos.y);
           setTool('select');
         }
       }
     },
-    [activeTool, connectionState.isConnecting, addShape, clearSelection, setTool, cancelConnection, getPointerPosition]
+    [activeTool, connectionState.isConnecting, addShape, clearSelection, setTool, cancelConnection, getPointerPosition, isSelecting]
+  );
+
+  // Handle double click for text editing
+  const handleStageDblClick = useCallback(
+    (e: KonvaEventObject<MouseEvent>) => {
+      if (e.target === e.target.getStage()) {
+        // Double click on empty canvas - create text box
+        const pos = getPointerPosition();
+        const newShape = addShape('text', pos.x, pos.y);
+        selectShape(newShape.id, false);
+        startTextEditing(newShape);
+      }
+    },
+    [getPointerPosition, addShape, selectShape, startTextEditing]
   );
 
   const handleStageMouseMove = useCallback(
     (e: KonvaEventObject<MouseEvent>) => {
+      // Update selection box
+      if (isSelecting && selectionBox) {
+        const pos = getPointerPosition();
+        setSelectionBox({ ...selectionBox, endX: pos.x, endY: pos.y });
+      }
+
+      // Spacebar pan
+      if (isSpaceDown && e.evt.buttons === 1) {
+        setViewPosition(
+          viewPosition.x + e.evt.movementX,
+          viewPosition.y + e.evt.movementY
+        );
+        return;
+      }
+
+      // Middle mouse pan
+      if (e.evt.buttons === 4) {
+        setViewPosition(
+          viewPosition.x + e.evt.movementX,
+          viewPosition.y + e.evt.movementY
+        );
+        return;
+      }
+
       if (connectionState.isConnecting) {
         const pos = getPointerPosition();
         updateConnection(pos.x, pos.y);
       }
     },
-    [connectionState.isConnecting, updateConnection, getPointerPosition]
+    [connectionState.isConnecting, updateConnection, getPointerPosition, isSelecting, selectionBox, isSpaceDown, viewPosition, setViewPosition]
   );
 
+  const handleStageMouseUp = useCallback(
+    (e: KonvaEventObject<MouseEvent>) => {
+      // Finish selection box
+      if (isSelecting && selectionBox) {
+        const minX = Math.min(selectionBox.startX, selectionBox.endX);
+        const maxX = Math.max(selectionBox.startX, selectionBox.endX);
+        const minY = Math.min(selectionBox.startY, selectionBox.endY);
+        const maxY = Math.max(selectionBox.startY, selectionBox.endY);
+
+        // Only select if box has meaningful size
+        if (maxX - minX > 5 || maxY - minY > 5) {
+          // Find shapes that intersect with selection box
+          const selectedIds = shapes.filter(shape => {
+            return (
+              shape.x < maxX &&
+              shape.x + shape.width > minX &&
+              shape.y < maxY &&
+              shape.y + shape.height > minY
+            );
+          }).map(s => s.id);
+
+          if (e.evt.shiftKey) {
+            // Add to existing selection
+            selectShapes([...new Set([...selectedShapeIds, ...selectedIds])]);
+          } else {
+            selectShapes(selectedIds);
+          }
+        }
+
+        setSelectionBox(null);
+        setIsSelecting(false);
+      }
+
+      // Stop middle mouse pan
+      if (isPanning) {
+        setPanning(false);
+      }
+    },
+    [isSelecting, selectionBox, shapes, selectedShapeIds, selectShapes, isPanning, setPanning]
+  );
+
+  // Handle wheel for zoom and pan
   const handleWheel = useCallback(
     (e: KonvaEventObject<WheelEvent>) => {
       e.evt.preventDefault();
       const stage = stageRef.current;
       if (!stage) return;
 
-      const oldScale = zoom;
-      const pointer = stage.getPointerPosition();
-      if (!pointer) return;
+      // Pinch-to-zoom on trackpad sends ctrlKey=true
+      // Regular scroll (two-finger) does not
+      if (e.evt.ctrlKey) {
+        // Zoom behavior (pinch or Ctrl+scroll)
+        const oldScale = zoom;
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
 
-      const scaleBy = 1.1;
-      const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-      const clampedScale = Math.max(0.1, Math.min(3, newScale));
+        const scaleBy = 1.05;
+        const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+        const clampedScale = Math.max(0.1, Math.min(3, newScale));
 
-      const mousePointTo = {
-        x: (pointer.x - viewPosition.x) / oldScale,
-        y: (pointer.y - viewPosition.y) / oldScale,
-      };
+        const mousePointTo = {
+          x: (pointer.x - viewPosition.x) / oldScale,
+          y: (pointer.y - viewPosition.y) / oldScale,
+        };
 
-      setZoom(clampedScale);
-      setViewPosition(
-        pointer.x - mousePointTo.x * clampedScale,
-        pointer.y - mousePointTo.y * clampedScale
-      );
+        setZoom(clampedScale);
+        setViewPosition(
+          pointer.x - mousePointTo.x * clampedScale,
+          pointer.y - mousePointTo.y * clampedScale
+        );
+      } else if (e.evt.shiftKey) {
+        // Shift + scroll = horizontal pan
+        setViewPosition(
+          viewPosition.x - e.evt.deltaY,
+          viewPosition.y
+        );
+      } else {
+        // Regular two-finger scroll = pan
+        setViewPosition(
+          viewPosition.x - e.evt.deltaX,
+          viewPosition.y - e.evt.deltaY
+        );
+      }
     },
     [zoom, viewPosition, setZoom, setViewPosition]
   );
 
   const handleStageDrag = useCallback(
     (e: KonvaEventObject<DragEvent>) => {
-      if (activeTool === 'pan') {
+      if (activeTool === 'pan' || isSpaceDown) {
         setViewPosition(e.target.x(), e.target.y());
       }
     },
-    [activeTool, setViewPosition]
+    [activeTool, setViewPosition, isSpaceDown]
   );
 
   const handleAnchorClick = useCallback(
     (shapeId: string, anchor: AnchorPosition, x: number, y: number) => {
       if (connectionState.isConnecting) {
-        // Complete existing connection
         endConnection(shapeId, anchor);
       } else if (activeTool === 'connector') {
-        // Connector tool: start drag-to-connect flow
         startConnection(shapeId, anchor, x, y);
       } else if (activeTool === 'select') {
-        // Select tool: quick-create connected shape (Lucidchart-style)
         quickCreateConnectedShape(shapeId, anchor);
       }
     },
     [connectionState.isConnecting, activeTool, startConnection, endConnection, quickCreateConnectedShape]
   );
 
-  // Render anchor points for a shape
-  // anchorOffset: if the shape group is positioned, we need relative coords
+  // Render anchor points with zoom-aware hit detection
   const renderAnchors = (shape: Shape, useRelativeCoords = false) => {
     const showAnchors =
       activeTool === 'connector' ||
@@ -332,6 +626,10 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
 
     const anchors = getShapeAnchors(shape);
 
+    // Scale anchor size inversely with zoom for consistent hit detection
+    const scaledRadius = Math.max(ANCHOR_RADIUS, ANCHOR_RADIUS / zoom);
+    const scaledHitRadius = Math.max(ANCHOR_HIT_RADIUS, ANCHOR_HIT_RADIUS / zoom);
+
     return anchors.map((anchor) => {
       const x = useRelativeCoords ? anchor.x - shape.x : anchor.x;
       const y = useRelativeCoords ? anchor.y - shape.y : anchor.y;
@@ -341,11 +639,11 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
           key={`anchor-${shape.id}-${anchor.position}`}
           x={x}
           y={y}
-          radius={ANCHOR_RADIUS}
+          radius={scaledRadius}
           fill={connectionState.isConnecting ? '#22c55e' : '#3b82f6'}
           stroke="#fff"
           strokeWidth={2}
-          hitStrokeWidth={ANCHOR_HIT_RADIUS}
+          hitStrokeWidth={scaledHitRadius}
           onMouseDown={(e) => {
             e.cancelBubble = true;
             handleAnchorClick(shape.id, anchor.position, anchor.x, anchor.y);
@@ -364,17 +662,30 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
 
   const renderShape = (shape: Shape) => {
     const isSelected = selectedShapeIds.includes(shape.id);
+    const isEditing = editingShapeId === shape.id;
 
-    // Common handlers for all shapes - applied to the outer Group
     const handleClick = (e: KonvaEventObject<MouseEvent>) => {
       if (connectionState.isConnecting) return;
       e.cancelBubble = true;
       selectShape(shape.id, e.evt.shiftKey);
     };
 
-    // Track drag start for multi-select
+    const handleDblClick = (e: KonvaEventObject<MouseEvent>) => {
+      e.cancelBubble = true;
+      startTextEditing(shape);
+    };
+
     const handleDragStart = (e: KonvaEventObject<DragEvent>) => {
       const node = e.target;
+
+      // Alt+drag to duplicate
+      if (e.evt.altKey && !isAltDragging) {
+        setIsAltDragging(true);
+        // We'll handle this through the store's duplicate functionality
+        duplicate();
+        return;
+      }
+
       dragStartRef.current = {
         shapeId: shape.id,
         startX: node.x(),
@@ -382,19 +693,15 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       };
     };
 
-    // Real-time position update during drag (for connector live updates)
-    // Supports multi-select: moves all selected shapes together
     const handleDragMove = (e: KonvaEventObject<DragEvent>) => {
       const node = e.target;
       const currentX = node.x();
       const currentY = node.y();
 
       if (selectedShapeIds.length > 1 && selectedShapeIds.includes(shape.id) && dragStartRef.current) {
-        // Multi-select drag: calculate delta and move all selected shapes
         const dx = currentX - dragStartRef.current.startX;
         const dy = currentY - dragStartRef.current.startY;
 
-        // Update all selected shapes
         const updates = selectedShapeIds.map(id => {
           const s = shapes.find(sh => sh.id === id);
           if (!s) return null;
@@ -405,12 +712,9 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         }).filter(Boolean) as { id: string; changes: Partial<Shape> }[];
 
         updateShapes(updates);
-
-        // Update drag start reference for next delta calculation
         dragStartRef.current.startX = currentX;
         dragStartRef.current.startY = currentY;
       } else {
-        // Single shape drag
         updateShape(shape.id, { x: currentX, y: currentY });
       }
     };
@@ -420,7 +724,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       const node = e.target;
 
       if (selectedShapeIds.length > 1 && selectedShapeIds.includes(shape.id)) {
-        // Multi-select: snap all selected shapes to grid
         const snapped = snapToGrid(node.x(), node.y());
         const dx = snapped.x - node.x();
         const dy = snapped.y - node.y();
@@ -436,7 +739,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         node.x(snapped.x);
         node.y(snapped.y);
       } else {
-        // Single shape: snap to grid
         const snapped = snapToGrid(node.x(), node.y());
         updateShape(shape.id, { x: snapped.x, y: snapped.y });
         node.x(snapped.x);
@@ -444,30 +746,30 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
 
       dragStartRef.current = null;
+      setIsAltDragging(false);
       saveToHistory();
     };
 
-    // Real-time size update during transform (for connector live updates)
     const handleTransform = (e: KonvaEventObject<Event>) => {
       const node = e.target;
       const scaleX = node.scaleX();
       const scaleY = node.scaleY();
 
-      // Calculate new dimensions
       const newWidth = Math.max(20, shape.width * scaleX);
       const newHeight = Math.max(20, shape.height * scaleY);
 
-      // Reset scale immediately to prevent icon/text distortion
       node.scaleX(1);
       node.scaleY(1);
 
-      // Update shape in real-time with new dimensions
+      // Get rotation
+      const rotation = node.rotation();
+
       updateShape(shape.id, {
         x: node.x(),
         y: node.y(),
         width: newWidth,
         height: newHeight,
-        rotation: node.rotation(),
+        rotation,
       });
     };
 
@@ -484,9 +786,9 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         rotation: node.rotation(),
       });
 
-      // Reset scale after applying to dimensions
       node.scaleX(1);
       node.scaleY(1);
+      saveToHistory();
     };
 
     const groupProps = {
@@ -496,8 +798,9 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       width: shape.width,
       height: shape.height,
       rotation: shape.rotation,
-      draggable: activeTool === 'select' && !connectionState.isConnecting,
+      draggable: activeTool === 'select' && !connectionState.isConnecting && !isSpaceDown,
       onClick: handleClick,
+      onDblClick: handleDblClick,
       onMouseEnter: () => setHoveredShape(shape.id),
       onMouseLeave: () => setHoveredShape(null),
       onDragStart: handleDragStart,
@@ -533,24 +836,26 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
             scaleX={1}
             scaleY={1}
           />
-          <Text
-            text={label}
-            x={0}
-            y={shape.height - 20}
-            width={shape.width}
-            height={20}
-            fontSize={11}
-            fontStyle="bold"
-            fill="#374151"
-            align="center"
-            verticalAlign="middle"
-          />
+          {!isEditing && (
+            <Text
+              text={label}
+              x={0}
+              y={shape.height - 20}
+              width={shape.width}
+              height={20}
+              fontSize={11}
+              fontStyle="bold"
+              fill="#374151"
+              align="center"
+              verticalAlign="middle"
+            />
+          )}
           {renderAnchors(shape, true)}
         </Group>
       );
     }
 
-    // Render basic shapes - all use Group with relative children
+    // Render basic shapes
     switch (shape.type) {
       case 'rectangle':
         return (
@@ -563,6 +868,19 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
               strokeWidth={isSelected ? 3 : shape.strokeWidth}
               cornerRadius={4}
             />
+            {shape.text && !isEditing && (
+              <Text
+                text={shape.text}
+                x={0}
+                y={0}
+                width={shape.width}
+                height={shape.height}
+                fontSize={14}
+                fill="#374151"
+                align="center"
+                verticalAlign="middle"
+              />
+            )}
             {renderAnchors(shape, true)}
           </Group>
         );
@@ -579,6 +897,19 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
               stroke={isSelected ? '#3b82f6' : shape.stroke}
               strokeWidth={isSelected ? 3 : shape.strokeWidth}
             />
+            {shape.text && !isEditing && (
+              <Text
+                text={shape.text}
+                x={0}
+                y={0}
+                width={shape.width}
+                height={shape.height}
+                fontSize={14}
+                fill="#374151"
+                align="center"
+                verticalAlign="middle"
+              />
+            )}
             {renderAnchors(shape, true)}
           </Group>
         );
@@ -599,6 +930,19 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
               stroke={isSelected ? '#3b82f6' : shape.stroke}
               strokeWidth={isSelected ? 3 : shape.strokeWidth}
             />
+            {shape.text && !isEditing && (
+              <Text
+                text={shape.text}
+                x={0}
+                y={0}
+                width={shape.width}
+                height={shape.height}
+                fontSize={14}
+                fill="#374151"
+                align="center"
+                verticalAlign="middle"
+              />
+            )}
             {renderAnchors(shape, true)}
           </Group>
         );
@@ -610,16 +954,21 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
               width={shape.width}
               height={shape.height}
               fill="transparent"
+              stroke={isSelected ? '#3b82f6' : 'transparent'}
+              strokeWidth={isSelected ? 1 : 0}
+              dash={[4, 4]}
             />
-            <Text
-              text={shape.text || 'Text'}
-              fontSize={16}
-              fill={shape.fill}
-              width={shape.width}
-              height={shape.height}
-              align="center"
-              verticalAlign="middle"
-            />
+            {!isEditing && (
+              <Text
+                text={shape.text || 'Double-click to edit'}
+                fontSize={16}
+                fill={shape.text ? shape.fill : '#9ca3af'}
+                width={shape.width}
+                height={shape.height}
+                align="center"
+                verticalAlign="middle"
+              />
+            )}
             {renderAnchors(shape, true)}
           </Group>
         );
@@ -634,41 +983,32 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     fromX: number, fromY: number, fromWidth: number, fromHeight: number,
     toX: number, toY: number, toWidth: number, toHeight: number
   ): { fromAnchor: AnchorPosition; toAnchor: AnchorPosition } => {
-    // Calculate shape centers
     const fromCenterX = fromX + fromWidth / 2;
     const fromCenterY = fromY + fromHeight / 2;
     const toCenterX = toX + toWidth / 2;
     const toCenterY = toY + toHeight / 2;
 
-    // Calculate direction vector
     const dx = toCenterX - fromCenterX;
     const dy = toCenterY - fromCenterY;
 
-    // Determine primary direction (horizontal or vertical)
     const isHorizontal = Math.abs(dx) > Math.abs(dy);
 
     let fromAnchor: AnchorPosition;
     let toAnchor: AnchorPosition;
 
     if (isHorizontal) {
-      // Shapes are more horizontally separated
       if (dx > 0) {
-        // To shape is to the right
         fromAnchor = 'right';
         toAnchor = 'left';
       } else {
-        // To shape is to the left
         fromAnchor = 'left';
         toAnchor = 'right';
       }
     } else {
-      // Shapes are more vertically separated
       if (dy > 0) {
-        // To shape is below
         fromAnchor = 'bottom';
         toAnchor = 'top';
       } else {
-        // To shape is above
         fromAnchor = 'top';
         toAnchor = 'bottom';
       }
@@ -681,7 +1021,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
   const getAnchorCoords = (
     x: number, y: number, width: number, height: number, anchor: AnchorPosition, rotation: number = 0
   ): { x: number; y: number } => {
-    // Calculate anchor position relative to shape top-left
     let anchorX: number;
     let anchorY: number;
 
@@ -704,12 +1043,10 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         break;
     }
 
-    // If no rotation, return the simple coordinates
     if (rotation === 0) {
       return { x: anchorX, y: anchorY };
     }
 
-    // Apply rotation transformation around shape center
     const centerX = x + width / 2;
     const centerY = y + height / 2;
     const angleRad = (rotation * Math.PI) / 180;
@@ -722,67 +1059,50 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     return { x: rotatedX, y: rotatedY };
   };
 
-  // Generate smart elbow path that avoids going through shapes
+  // Generate smart elbow path
   const generateElbowPath = (
     from: { x: number; y: number },
     to: { x: number; y: number },
     fromAnchor: AnchorPosition,
     toAnchor: AnchorPosition
   ): number[] => {
-    const MIN_MARGIN = 20; // Minimum distance from shape edges
+    const MIN_MARGIN = 20;
 
-    // Calculate distance between endpoints
     const dx = Math.abs(to.x - from.x);
     const dy = Math.abs(to.y - from.y);
 
-    // For very close shapes (less than 2x margin), use straight line
     if (dx < MIN_MARGIN * 2 && dy < MIN_MARGIN * 2) {
       return [from.x, from.y, to.x, to.y];
     }
 
-    // Calculate adaptive margin based on available space
     const adaptiveMarginX = Math.min(MIN_MARGIN, dx / 4);
     const adaptiveMarginY = Math.min(MIN_MARGIN, dy / 4);
 
-    // For horizontal anchors (left/right)
     if (fromAnchor === 'left' || fromAnchor === 'right') {
       if (toAnchor === 'left' || toAnchor === 'right') {
-        // Both horizontal - use midpoint
         const midX = (from.x + to.x) / 2;
-
-        // Check if shapes are very close horizontally
         if (Math.abs(from.x - to.x) < MIN_MARGIN * 2) {
-          // Route around by going up/down first
           const offsetY = from.y < to.y ? -MIN_MARGIN : MIN_MARGIN;
           const routeY = Math.min(from.y, to.y) + offsetY;
           return [from.x, from.y, from.x, routeY, to.x, routeY, to.x, to.y];
         }
-
         return [from.x, from.y, midX, from.y, midX, to.y, to.x, to.y];
       } else {
-        // From horizontal, to vertical
         const extendX = fromAnchor === 'right'
           ? Math.max(from.x + adaptiveMarginX, to.x)
           : Math.min(from.x - adaptiveMarginX, to.x);
         return [from.x, from.y, extendX, from.y, extendX, to.y, to.x, to.y];
       }
     } else {
-      // For vertical anchors (top/bottom)
       if (toAnchor === 'top' || toAnchor === 'bottom') {
-        // Both vertical - use midpoint
         const midY = (from.y + to.y) / 2;
-
-        // Check if shapes are very close vertically
         if (Math.abs(from.y - to.y) < MIN_MARGIN * 2) {
-          // Route around by going left/right first
           const offsetX = from.x < to.x ? -MIN_MARGIN : MIN_MARGIN;
           const routeX = Math.min(from.x, to.x) + offsetX;
           return [from.x, from.y, routeX, from.y, routeX, to.y, to.x, to.y];
         }
-
         return [from.x, from.y, from.x, midY, to.x, midY, to.x, to.y];
       } else {
-        // From vertical, to horizontal
         const extendY = fromAnchor === 'bottom'
           ? Math.max(from.y + adaptiveMarginY, to.y)
           : Math.min(from.y - adaptiveMarginY, to.y);
@@ -797,7 +1117,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
 
     if (!fromShape || !toShape) return null;
 
-    // Get actual node positions from Konva stage for real-time accuracy during drag
     const stage = stageRef.current;
     let fromX = fromShape.x;
     let fromY = fromShape.y;
@@ -818,7 +1137,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
-    // Get rotation values (also check Konva nodes for current rotation during transform)
     let fromRotation = fromShape.rotation || 0;
     let toRotation = toShape.rotation || 0;
 
@@ -833,13 +1151,11 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
-    // Calculate optimal anchors based on current positions (dynamic routing)
     const { fromAnchor, toAnchor } = calculateOptimalAnchors(
       fromX, fromY, fromShape.width, fromShape.height,
       toX, toY, toShape.width, toShape.height
     );
 
-    // Calculate anchor point coordinates with rotation
     const from = getAnchorCoords(fromX, fromY, fromShape.width, fromShape.height, fromAnchor, fromRotation);
     const to = getAnchorCoords(toX, toY, toShape.width, toShape.height, toAnchor, toRotation);
 
@@ -850,20 +1166,19 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     if (connector.style === 'elbow') {
       points = generateElbowPath(from, to, fromAnchor, toAnchor);
     } else {
-      // Straight line
       points = [from.x, from.y, to.x, to.y];
     }
 
-    // Calculate label position (midpoint of connector)
     let labelX = (from.x + to.x) / 2;
     let labelY = (from.y + to.y) / 2;
 
-    // For elbow connectors, use the middle segment's midpoint
     if (connector.style === 'elbow' && points.length >= 8) {
-      // Middle segment is between points[2,3] and points[4,5]
       labelX = (points[2] + points[4]) / 2;
       labelY = (points[3] + points[5]) / 2;
     }
+
+    // Scale hit area for low zoom
+    const hitWidth = Math.max(10, 10 / zoom);
 
     return (
       <Group key={connector.id}>
@@ -880,7 +1195,11 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
             e.cancelBubble = true;
             selectConnector(connector.id, e.evt.shiftKey);
           }}
-          hitStrokeWidth={10}
+          onDblClick={(e) => {
+            e.cancelBubble = true;
+            // TODO: Edit connector label
+          }}
+          hitStrokeWidth={hitWidth}
         />
         {connector.label && (
           <Group x={labelX} y={labelY}>
@@ -917,7 +1236,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     const fromShape = shapes.find((s) => s.id === connectionState.fromShapeId);
     if (!fromShape) return null;
 
-    // Get actual node position from Konva stage for real-time accuracy
     const stage = stageRef.current;
     let fromX = fromShape.x;
     let fromY = fromShape.y;
@@ -930,7 +1248,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
-    // Get rotation from Konva node for real-time accuracy
     let fromRotation = fromShape.rotation || 0;
     if (stage) {
       const fromNode = stage.findOne(`#shape-${connectionState.fromShapeId}`);
@@ -939,7 +1256,6 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       }
     }
 
-    // Calculate anchor point using actual node position with rotation
     const from = getAnchorCoords(
       fromX, fromY, fromShape.width, fromShape.height,
       connectionState.fromAnchor, fromRotation
@@ -991,52 +1307,213 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     return <>{gridLines}</>;
   };
 
+  // Render selection box
+  const renderSelectionBox = () => {
+    if (!selectionBox || !isSelecting) return null;
+
+    const x = Math.min(selectionBox.startX, selectionBox.endX);
+    const y = Math.min(selectionBox.startY, selectionBox.endY);
+    const w = Math.abs(selectionBox.endX - selectionBox.startX);
+    const h = Math.abs(selectionBox.endY - selectionBox.startY);
+
+    return (
+      <Rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        fill="rgba(59, 130, 246, 0.1)"
+        stroke="#3b82f6"
+        strokeWidth={1}
+        dash={[4, 4]}
+      />
+    );
+  };
+
+  // Get editing shape position for text overlay
+  const getEditingShapeScreenPosition = () => {
+    if (!editingShapeId || !stageRef.current) return null;
+    const shape = shapes.find(s => s.id === editingShapeId);
+    if (!shape) return null;
+
+    return {
+      x: shape.x * zoom + viewPosition.x,
+      y: shape.y * zoom + viewPosition.y,
+      width: shape.width * zoom,
+      height: shape.height * zoom,
+    };
+  };
+
+  const editingPos = getEditingShapeScreenPosition();
+
+  // Determine cursor based on state
+  const getCursor = () => {
+    if (isSpaceDown) return isPanning ? 'grabbing' : 'grab';
+    if (connectionState.isConnecting) return 'crosshair';
+    if (activeTool === 'pan') return isPanning ? 'grabbing' : 'grab';
+    if (activeTool === 'connector') return 'crosshair';
+    if (isSelecting) return 'crosshair';
+    return 'default';
+  };
+
   return (
-    <Stage
-      ref={stageRef}
-      width={width}
-      height={height}
-      scaleX={zoom}
-      scaleY={zoom}
-      x={viewPosition.x}
-      y={viewPosition.y}
-      draggable={activeTool === 'pan'}
-      onClick={handleStageClick}
-      onMouseMove={handleStageMouseMove}
-      onWheel={handleWheel}
-      onDragStart={() => activeTool === 'pan' && setPanning(true)}
-      onDragEnd={() => setPanning(false)}
-      onDragMove={handleStageDrag}
-      style={{
-        backgroundColor: settings.backgroundColor,
-        cursor: connectionState.isConnecting
-          ? 'crosshair'
-          : activeTool === 'pan'
-          ? isPanning
-            ? 'grabbing'
-            : 'grab'
-          : activeTool === 'connector'
-          ? 'crosshair'
-          : 'default',
-      }}
-    >
-      <Layer>
-        {renderGrid()}
-        {connectors.map(renderConnector)}
-        {renderConnectionLine()}
-        {shapes.map(renderShape)}
-        <Transformer
-          ref={transformerRef}
-          rotateEnabled={true}
-          enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'top-center', 'bottom-center']}
-          boundBoxFunc={(oldBox, newBox) => {
-            if (newBox.width < 20 || newBox.height < 20) {
-              return oldBox;
+    <div style={{ position: 'relative', width, height }}>
+      <Stage
+        ref={stageRef}
+        width={width}
+        height={height}
+        scaleX={zoom}
+        scaleY={zoom}
+        x={viewPosition.x}
+        y={viewPosition.y}
+        draggable={activeTool === 'pan' || isSpaceDown}
+        onClick={handleStageClick}
+        onDblClick={handleStageDblClick}
+        onMouseDown={handleStageMouseDown}
+        onMouseMove={handleStageMouseMove}
+        onMouseUp={handleStageMouseUp}
+        onWheel={handleWheel}
+        onDragStart={() => (activeTool === 'pan' || isSpaceDown) && setPanning(true)}
+        onDragEnd={() => setPanning(false)}
+        onDragMove={handleStageDrag}
+        onContextMenu={(e) => e.evt.preventDefault()}
+        style={{
+          backgroundColor: settings.backgroundColor,
+          cursor: getCursor(),
+        }}
+      >
+        <Layer>
+          {renderGrid()}
+          {connectors.map(renderConnector)}
+          {renderConnectionLine()}
+          {shapes.map(renderShape)}
+          {renderSelectionBox()}
+          <Transformer
+            ref={transformerRef}
+            rotateEnabled={true}
+            enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'middle-left', 'middle-right', 'top-center', 'bottom-center']}
+            boundBoxFunc={(oldBox, newBox) => {
+              if (newBox.width < 20 || newBox.height < 20) {
+                return oldBox;
+              }
+              return newBox;
+            }}
+          />
+        </Layer>
+      </Stage>
+
+      {/* Text editing overlay */}
+      {editingShapeId && editingPos && (
+        <textarea
+          ref={textEditRef}
+          value={editingText}
+          onChange={(e) => setEditingText(e.target.value)}
+          onBlur={finishTextEditing}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setEditingShapeId(null);
+              setEditingText('');
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              finishTextEditing();
             }
-            return newBox;
+          }}
+          style={{
+            position: 'absolute',
+            left: editingPos.x,
+            top: editingPos.y,
+            width: editingPos.width,
+            height: editingPos.height,
+            fontSize: 14 * zoom,
+            fontFamily: 'inherit',
+            textAlign: 'center',
+            border: '2px solid #3b82f6',
+            borderRadius: 4,
+            padding: 4,
+            resize: 'none',
+            outline: 'none',
+            background: 'white',
+            zIndex: 1000,
           }}
         />
-      </Layer>
-    </Stage>
+      )}
+
+      {/* Context menu */}
+      {contextMenu.visible && (
+        <div
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            backgroundColor: 'white',
+            border: '1px solid #e5e7eb',
+            borderRadius: 8,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 1000,
+            minWidth: 180,
+            padding: '4px 0',
+          }}
+          onClick={() => setContextMenu({ ...contextMenu, visible: false })}
+        >
+          {contextMenu.isCanvasMenu ? (
+            // Canvas context menu
+            <>
+              <ContextMenuItem label="Paste" shortcut="⌘V" onClick={() => paste()} />
+              <ContextMenuItem label="Select All" shortcut="⌘A" onClick={() => selectAll()} />
+              <ContextMenuDivider />
+              <ContextMenuItem label="Fit to Screen" shortcut="⌘1" onClick={() => fitToScreen()} />
+              <ContextMenuItem label="Reset Zoom" shortcut="⌘0" onClick={() => setZoom(1)} />
+            </>
+          ) : (
+            // Shape context menu
+            <>
+              <ContextMenuItem label="Cut" shortcut="⌘X" onClick={() => { copy(); deleteSelectedShapes(); }} />
+              <ContextMenuItem label="Copy" shortcut="⌘C" onClick={() => copy()} />
+              <ContextMenuItem label="Paste" shortcut="⌘V" onClick={() => paste()} />
+              <ContextMenuItem label="Duplicate" shortcut="⌘D" onClick={() => duplicate()} />
+              <ContextMenuItem label="Delete" shortcut="⌫" onClick={() => { deleteSelectedShapes(); deleteSelectedConnectors(); }} />
+              <ContextMenuDivider />
+              <ContextMenuItem label="Bring to Front" shortcut="⌘⇧]" onClick={() => selectedShapeIds[0] && bringToFront(selectedShapeIds[0])} />
+              <ContextMenuItem label="Bring Forward" shortcut="⌘]" onClick={() => selectedShapeIds[0] && bringForward(selectedShapeIds[0])} />
+              <ContextMenuItem label="Send Backward" shortcut="⌘[" onClick={() => selectedShapeIds[0] && sendBackward(selectedShapeIds[0])} />
+              <ContextMenuItem label="Send to Back" shortcut="⌘⇧[" onClick={() => selectedShapeIds[0] && sendToBack(selectedShapeIds[0])} />
+              <ContextMenuDivider />
+              <ContextMenuItem label="Edit Text" shortcut="Enter" onClick={() => {
+                const shape = shapes.find(s => s.id === selectedShapeIds[0]);
+                if (shape) startTextEditing(shape);
+              }} />
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
+}
+
+// Context menu components
+function ContextMenuItem({ label, shortcut, onClick, disabled }: { label: string; shortcut?: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <div
+      onClick={disabled ? undefined : onClick}
+      style={{
+        padding: '8px 16px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        cursor: disabled ? 'default' : 'pointer',
+        color: disabled ? '#9ca3af' : '#374151',
+        backgroundColor: 'transparent',
+        transition: 'background-color 0.1s',
+      }}
+      onMouseEnter={(e) => !disabled && (e.currentTarget.style.backgroundColor = '#f3f4f6')}
+      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+    >
+      <span>{label}</span>
+      {shortcut && <span style={{ color: '#9ca3af', fontSize: 12, marginLeft: 24 }}>{shortcut}</span>}
+    </div>
+  );
+}
+
+function ContextMenuDivider() {
+  return <div style={{ height: 1, backgroundColor: '#e5e7eb', margin: '4px 0' }} />;
 }

@@ -2011,3 +2011,729 @@ describe('Elbow routing improvements', () => {
     expect(path.length).toBe(8);
   });
 });
+
+// ============================================================
+// NEW INTERACTION FEATURE TESTS
+// ============================================================
+
+describe('Zoom functionality', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      zoom: 1,
+      viewPosition: { x: 0, y: 0 },
+    });
+  });
+
+  it('should set zoom level', () => {
+    const store = useDiagramStore.getState();
+    store.setZoom(1.5);
+
+    expect(useDiagramStore.getState().zoom).toBe(1.5);
+  });
+
+  it('should clamp zoom to minimum 0.1', () => {
+    const store = useDiagramStore.getState();
+    store.setZoom(0.05);
+
+    expect(useDiagramStore.getState().zoom).toBe(0.1);
+  });
+
+  it('should clamp zoom to maximum 3', () => {
+    const store = useDiagramStore.getState();
+    store.setZoom(5);
+
+    expect(useDiagramStore.getState().zoom).toBe(3);
+  });
+
+  it('should set view position', () => {
+    const store = useDiagramStore.getState();
+    store.setViewPosition(100, 200);
+
+    const state = useDiagramStore.getState();
+    expect(state.viewPosition.x).toBe(100);
+    expect(state.viewPosition.y).toBe(200);
+  });
+
+  it('should support negative view positions for panning', () => {
+    const store = useDiagramStore.getState();
+    store.setViewPosition(-500, -300);
+
+    const state = useDiagramStore.getState();
+    expect(state.viewPosition.x).toBe(-500);
+    expect(state.viewPosition.y).toBe(-300);
+  });
+});
+
+describe('Fit to screen calculation', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      zoom: 1,
+      viewPosition: { x: 0, y: 0 },
+    });
+  });
+
+  it('should calculate bounding box of shapes', () => {
+    const store = useDiagramStore.getState();
+    store.addShape('rectangle', 100, 100); // 100x100 by default
+    store.addShape('rectangle', 400, 300);
+
+    const state = useDiagramStore.getState();
+    const shapes = state.shapes;
+
+    // Calculate bounding box manually
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    shapes.forEach(shape => {
+      minX = Math.min(minX, shape.x);
+      minY = Math.min(minY, shape.y);
+      maxX = Math.max(maxX, shape.x + shape.width);
+      maxY = Math.max(maxY, shape.y + shape.height);
+    });
+
+    expect(minX).toBe(100);
+    expect(minY).toBe(100);
+    expect(maxX).toBe(500); // 400 + 100
+    expect(maxY).toBe(400); // 300 + 100
+  });
+
+  it('should calculate content dimensions', () => {
+    const store = useDiagramStore.getState();
+    store.addShape('rectangle', 0, 0);
+    store.addShape('rectangle', 200, 200);
+
+    const state = useDiagramStore.getState();
+    const shapes = state.shapes;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    shapes.forEach(shape => {
+      minX = Math.min(minX, shape.x);
+      minY = Math.min(minY, shape.y);
+      maxX = Math.max(maxX, shape.x + shape.width);
+      maxY = Math.max(maxY, shape.y + shape.height);
+    });
+
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+
+    expect(contentWidth).toBe(300); // 200 + 100 - 0
+    expect(contentHeight).toBe(300);
+  });
+});
+
+describe('Select shapes (multi-select)', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+    });
+  });
+
+  it('should select multiple shapes at once', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 200, 200);
+    const shape3 = store.addShape('rectangle', 300, 300);
+
+    store.selectShapes([shape1.id, shape2.id]);
+
+    const state = useDiagramStore.getState();
+    expect(state.selectedShapeIds).toHaveLength(2);
+    expect(state.selectedShapeIds).toContain(shape1.id);
+    expect(state.selectedShapeIds).toContain(shape2.id);
+    expect(state.selectedShapeIds).not.toContain(shape3.id);
+  });
+
+  it('should clear previous selection when selecting new shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 200, 200);
+
+    store.selectShape(shape1.id);
+    expect(useDiagramStore.getState().selectedShapeIds).toContain(shape1.id);
+
+    store.selectShapes([shape2.id]);
+    const state = useDiagramStore.getState();
+    expect(state.selectedShapeIds).toHaveLength(1);
+    expect(state.selectedShapeIds).toContain(shape2.id);
+    expect(state.selectedShapeIds).not.toContain(shape1.id);
+  });
+
+  it('should clear connector selection when selecting shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.startConnection(shape1.id, 'right', 200, 150);
+    store.endConnection(shape2.id, 'left');
+
+    const connectorId = useDiagramStore.getState().connectors[0].id;
+    store.selectConnector(connectorId);
+    expect(useDiagramStore.getState().selectedConnectorIds).toContain(connectorId);
+
+    store.selectShapes([shape1.id]);
+    expect(useDiagramStore.getState().selectedConnectorIds).toHaveLength(0);
+  });
+
+  it('should select all shapes with selectAll', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 200, 200);
+    const shape3 = store.addShape('rectangle', 300, 300);
+
+    store.selectAll();
+
+    const state = useDiagramStore.getState();
+    expect(state.selectedShapeIds).toHaveLength(3);
+    expect(state.selectedShapeIds).toContain(shape1.id);
+    expect(state.selectedShapeIds).toContain(shape2.id);
+    expect(state.selectedShapeIds).toContain(shape3.id);
+  });
+});
+
+describe('Marquee selection logic', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+    });
+  });
+
+  // Test the intersection logic used in marquee selection
+  const shapesIntersectBox = (shapes: Shape[], minX: number, minY: number, maxX: number, maxY: number): string[] => {
+    return shapes.filter(shape => {
+      return (
+        shape.x < maxX &&
+        shape.x + shape.width > minX &&
+        shape.y < maxY &&
+        shape.y + shape.height > minY
+      );
+    }).map(s => s.id);
+  };
+
+  it('should select shapes fully inside selection box', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 500, 500);
+
+    const shapes = useDiagramStore.getState().shapes;
+
+    // Selection box from (50, 50) to (250, 250)
+    const selected = shapesIntersectBox(shapes, 50, 50, 250, 250);
+
+    expect(selected).toContain(shape1.id);
+    expect(selected).not.toContain(shape2.id);
+  });
+
+  it('should select shapes partially overlapping selection box', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100); // 100x100
+
+    const shapes = useDiagramStore.getState().shapes;
+
+    // Selection box overlaps corner
+    const selected = shapesIntersectBox(shapes, 150, 150, 250, 250);
+
+    expect(selected).toContain(shape.id);
+  });
+
+  it('should not select shapes outside selection box', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 400, 400);
+
+    const shapes = useDiagramStore.getState().shapes;
+
+    // Selection box doesn't touch shape
+    const selected = shapesIntersectBox(shapes, 0, 0, 100, 100);
+
+    expect(selected).not.toContain(shape.id);
+  });
+
+  it('should select multiple overlapping shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 150, 150);
+    const shape3 = store.addShape('rectangle', 200, 200);
+
+    const shapes = useDiagramStore.getState().shapes;
+
+    // Selection box covers all three
+    const selected = shapesIntersectBox(shapes, 50, 50, 350, 350);
+
+    expect(selected).toHaveLength(3);
+    expect(selected).toContain(shape1.id);
+    expect(selected).toContain(shape2.id);
+    expect(selected).toContain(shape3.id);
+  });
+});
+
+describe('Tool switching', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      activeTool: 'select',
+      connectionState: {
+        isConnecting: false,
+        fromShapeId: null,
+        fromAnchor: null,
+        currentX: 0,
+        currentY: 0,
+      },
+    });
+  });
+
+  it('should switch to pan tool', () => {
+    const store = useDiagramStore.getState();
+    store.setTool('pan');
+
+    expect(useDiagramStore.getState().activeTool).toBe('pan');
+  });
+
+  it('should switch to connector tool', () => {
+    const store = useDiagramStore.getState();
+    store.setTool('connector');
+
+    expect(useDiagramStore.getState().activeTool).toBe('connector');
+  });
+
+  it('should cancel connection when switching tools', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.setTool('connector');
+    store.startConnection(shape.id, 'right', 200, 150);
+
+    expect(useDiagramStore.getState().connectionState.isConnecting).toBe(true);
+
+    store.setTool('select');
+
+    expect(useDiagramStore.getState().connectionState.isConnecting).toBe(false);
+  });
+
+  it('should switch to shape tools', () => {
+    const store = useDiagramStore.getState();
+
+    store.setTool('rectangle');
+    expect(useDiagramStore.getState().activeTool).toBe('rectangle');
+
+    store.setTool('circle');
+    expect(useDiagramStore.getState().activeTool).toBe('circle');
+
+    store.setTool('diamond');
+    expect(useDiagramStore.getState().activeTool).toBe('diamond');
+
+    store.setTool('text');
+    expect(useDiagramStore.getState().activeTool).toBe('text');
+  });
+});
+
+describe('Panning state', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      isPanning: false,
+      viewPosition: { x: 0, y: 0 },
+    });
+  });
+
+  it('should set panning state', () => {
+    const store = useDiagramStore.getState();
+    store.setPanning(true);
+
+    expect(useDiagramStore.getState().isPanning).toBe(true);
+  });
+
+  it('should stop panning', () => {
+    const store = useDiagramStore.getState();
+    store.setPanning(true);
+    store.setPanning(false);
+
+    expect(useDiagramStore.getState().isPanning).toBe(false);
+  });
+});
+
+describe('Shape text editing', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+    });
+  });
+
+  it('should update shape text', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.updateShape(shape.id, { text: 'Hello World' });
+
+    const updatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(updatedShape?.text).toBe('Hello World');
+  });
+
+  it('should update shape label', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.updateShape(shape.id, { label: 'My Label' });
+
+    const updatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(updatedShape?.label).toBe('My Label');
+  });
+
+  it('should support empty text', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.updateShape(shape.id, { text: 'Initial' });
+    store.updateShape(shape.id, { text: '' });
+
+    const updatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(updatedShape?.text).toBe('');
+  });
+});
+
+describe('Duplicate functionality', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+      selectedConnectorIds: [],
+      clipboard: null,
+      pasteCount: 0,
+      history: [{ shapes: [], connectors: [] }],
+      historyIndex: 0,
+    });
+  });
+
+  it('should duplicate selected shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.selectShape(shape.id);
+    store.duplicate();
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes).toHaveLength(2);
+  });
+
+  it('should offset duplicated shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.selectShape(shape.id);
+    store.duplicate();
+
+    const state = useDiagramStore.getState();
+    const duplicated = state.shapes.find(s => s.id !== shape.id);
+
+    expect(duplicated?.x).toBeGreaterThan(shape.x);
+    expect(duplicated?.y).toBeGreaterThan(shape.y);
+  });
+
+  it('should duplicate multiple selected shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.selectShape(shape1.id);
+    store.selectShape(shape2.id, true);
+    store.duplicate();
+
+    const state = useDiagramStore.getState();
+    expect(state.shapes).toHaveLength(4);
+  });
+
+  it('should select duplicated shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.selectShape(shape.id);
+    store.duplicate();
+
+    const state = useDiagramStore.getState();
+    // Original should no longer be selected
+    expect(state.selectedShapeIds).not.toContain(shape.id);
+    // New shape should be selected
+    expect(state.selectedShapeIds).toHaveLength(1);
+  });
+});
+
+describe('Hit detection scaling', () => {
+  // Test that hit areas scale properly with zoom
+
+  it('should scale anchor radius inversely with zoom', () => {
+    const ANCHOR_RADIUS = 6;
+
+    const getScaledRadius = (zoom: number) => {
+      return Math.max(ANCHOR_RADIUS, ANCHOR_RADIUS / zoom);
+    };
+
+    // At zoom 1, radius is normal
+    expect(getScaledRadius(1)).toBe(6);
+
+    // At zoom 0.5, radius should double
+    expect(getScaledRadius(0.5)).toBe(12);
+
+    // At zoom 2, radius should stay at minimum
+    expect(getScaledRadius(2)).toBe(6);
+
+    // At very low zoom, radius should be much larger
+    expect(getScaledRadius(0.25)).toBe(24);
+  });
+
+  it('should scale hit stroke width inversely with zoom', () => {
+    const ANCHOR_HIT_RADIUS = 12;
+
+    const getScaledHitRadius = (zoom: number) => {
+      return Math.max(ANCHOR_HIT_RADIUS, ANCHOR_HIT_RADIUS / zoom);
+    };
+
+    expect(getScaledHitRadius(1)).toBe(12);
+    expect(getScaledHitRadius(0.5)).toBe(24);
+    expect(getScaledHitRadius(0.25)).toBe(48);
+  });
+
+  it('should scale connector hit width inversely with zoom', () => {
+    const getHitWidth = (zoom: number) => {
+      return Math.max(10, 10 / zoom);
+    };
+
+    expect(getHitWidth(1)).toBe(10);
+    expect(getHitWidth(0.5)).toBe(20);
+    expect(getHitWidth(0.2)).toBe(50);
+  });
+});
+
+describe('Move selected shapes', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+      selectedShapeIds: [],
+    });
+  });
+
+  it('should move selected shapes by delta', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.selectShape(shape.id);
+    store.moveSelectedShapes(50, 30);
+
+    const movedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(movedShape?.x).toBe(150);
+    expect(movedShape?.y).toBe(130);
+  });
+
+  it('should move multiple selected shapes together', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 200);
+
+    store.selectShape(shape1.id);
+    store.selectShape(shape2.id, true);
+    store.moveSelectedShapes(20, 20);
+
+    const state = useDiagramStore.getState();
+    const moved1 = state.shapes.find(s => s.id === shape1.id);
+    const moved2 = state.shapes.find(s => s.id === shape2.id);
+
+    expect(moved1?.x).toBe(120);
+    expect(moved1?.y).toBe(120);
+    expect(moved2?.x).toBe(320);
+    expect(moved2?.y).toBe(220);
+  });
+
+  it('should not move unselected shapes', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 200);
+
+    store.selectShape(shape1.id);
+    store.moveSelectedShapes(50, 50);
+
+    const state = useDiagramStore.getState();
+    const shape2State = state.shapes.find(s => s.id === shape2.id);
+
+    expect(shape2State?.x).toBe(300);
+    expect(shape2State?.y).toBe(200);
+  });
+
+  it('should handle negative deltas', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.selectShape(shape.id);
+    store.moveSelectedShapes(-30, -40);
+
+    const movedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(movedShape?.x).toBe(70);
+    expect(movedShape?.y).toBe(60);
+  });
+
+  it('should do nothing when no shapes selected', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    // Don't select anything
+    store.moveSelectedShapes(50, 50);
+
+    const stateShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(stateShape?.x).toBe(100);
+    expect(stateShape?.y).toBe(100);
+  });
+});
+
+describe('Grid snapping', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      settings: {
+        backgroundColor: '#ffffff',
+        gridEnabled: true,
+        snapToGrid: true,
+        gridSize: 20,
+      },
+    });
+  });
+
+  it('should snap coordinates to grid', () => {
+    const store = useDiagramStore.getState();
+    const snapped = store.snapToGrid(105, 117);
+
+    expect(snapped.x).toBe(100);
+    expect(snapped.y).toBe(120);
+  });
+
+  it('should round to nearest grid line', () => {
+    const store = useDiagramStore.getState();
+
+    // Just under half grid size
+    let snapped = store.snapToGrid(109, 109);
+    expect(snapped.x).toBe(100);
+    expect(snapped.y).toBe(100);
+
+    // Just over half grid size
+    snapped = store.snapToGrid(111, 111);
+    expect(snapped.x).toBe(120);
+    expect(snapped.y).toBe(120);
+  });
+
+  it('should not snap when snapToGrid is disabled', () => {
+    useDiagramStore.setState({
+      settings: {
+        backgroundColor: '#ffffff',
+        gridEnabled: true,
+        snapToGrid: false,
+        gridSize: 20,
+      },
+    });
+
+    const store = useDiagramStore.getState();
+    const snapped = store.snapToGrid(105, 117);
+
+    expect(snapped.x).toBe(105);
+    expect(snapped.y).toBe(117);
+  });
+
+  it('should work with different grid sizes', () => {
+    useDiagramStore.setState({
+      settings: {
+        backgroundColor: '#ffffff',
+        gridEnabled: true,
+        snapToGrid: true,
+        gridSize: 10,
+      },
+    });
+
+    const store = useDiagramStore.getState();
+    const snapped = store.snapToGrid(107, 113);
+
+    expect(snapped.x).toBe(110);
+    expect(snapped.y).toBe(110);
+  });
+});
+
+describe('Shape rotation', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      connectors: [],
+    });
+  });
+
+  it('should update shape rotation', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.updateShape(shape.id, { rotation: 45 });
+
+    const rotatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(rotatedShape?.rotation).toBe(45);
+  });
+
+  it('should handle 360 degree rotation', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.updateShape(shape.id, { rotation: 360 });
+
+    const rotatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(rotatedShape?.rotation).toBe(360);
+  });
+
+  it('should handle negative rotation', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.updateShape(shape.id, { rotation: -90 });
+
+    const rotatedShape = useDiagramStore.getState().shapes.find(s => s.id === shape.id);
+    expect(rotatedShape?.rotation).toBe(-90);
+  });
+});
+
+describe('Hovered shape state', () => {
+  beforeEach(() => {
+    useDiagramStore.setState({
+      shapes: [],
+      hoveredShapeId: null,
+    });
+  });
+
+  it('should set hovered shape', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.setHoveredShape(shape.id);
+
+    expect(useDiagramStore.getState().hoveredShapeId).toBe(shape.id);
+  });
+
+  it('should clear hovered shape', () => {
+    const store = useDiagramStore.getState();
+    const shape = store.addShape('rectangle', 100, 100);
+
+    store.setHoveredShape(shape.id);
+    store.setHoveredShape(null);
+
+    expect(useDiagramStore.getState().hoveredShapeId).toBeNull();
+  });
+
+  it('should update to different hovered shape', () => {
+    const store = useDiagramStore.getState();
+    const shape1 = store.addShape('rectangle', 100, 100);
+    const shape2 = store.addShape('rectangle', 300, 100);
+
+    store.setHoveredShape(shape1.id);
+    expect(useDiagramStore.getState().hoveredShapeId).toBe(shape1.id);
+
+    store.setHoveredShape(shape2.id);
+    expect(useDiagramStore.getState().hoveredShapeId).toBe(shape2.id);
+  });
+});
