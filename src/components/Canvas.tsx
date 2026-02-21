@@ -693,9 +693,13 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         return;
       }
 
+      // Get fresh state to check if shape is currently selected
+      const { selectedShapeIds: currentSelectedIds } = useDiagramStore.getState();
+      const isCurrentlySelected = currentSelectedIds.includes(shape.id);
+
       // If dragging a shape that's not selected, select it first
       // (unless shift is held, then add to selection)
-      if (!isSelected) {
+      if (!isCurrentlySelected) {
         selectShape(shape.id, e.evt.shiftKey);
       }
 
@@ -711,12 +715,15 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
       const currentX = node.x();
       const currentY = node.y();
 
-      if (selectedShapeIds.length > 1 && selectedShapeIds.includes(shape.id) && dragStartRef.current) {
+      // Get fresh state to avoid stale closure issues
+      const { selectedShapeIds: currentSelectedIds, shapes: currentShapes } = useDiagramStore.getState();
+
+      if (currentSelectedIds.length > 1 && currentSelectedIds.includes(shape.id) && dragStartRef.current) {
         const dx = currentX - dragStartRef.current.startX;
         const dy = currentY - dragStartRef.current.startY;
 
-        const updates = selectedShapeIds.map(id => {
-          const s = shapes.find(sh => sh.id === id);
+        const updates = currentSelectedIds.map(id => {
+          const s = currentShapes.find(sh => sh.id === id);
           if (!s) return null;
           if (id === shape.id) {
             return { id, changes: { x: currentX, y: currentY } };
@@ -733,16 +740,16 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     };
 
     const handleDragEnd = (e: KonvaEventObject<DragEvent>) => {
-      const { snapToGrid, saveToHistory } = useDiagramStore.getState();
+      const { snapToGrid, saveToHistory, selectedShapeIds: currentSelectedIds, shapes: currentShapes } = useDiagramStore.getState();
       const node = e.target;
 
-      if (selectedShapeIds.length > 1 && selectedShapeIds.includes(shape.id)) {
+      if (currentSelectedIds.length > 1 && currentSelectedIds.includes(shape.id)) {
         const snapped = snapToGrid(node.x(), node.y());
         const dx = snapped.x - node.x();
         const dy = snapped.y - node.y();
 
-        const updates = selectedShapeIds.map(id => {
-          const s = shapes.find(sh => sh.id === id);
+        const updates = currentSelectedIds.map(id => {
+          const s = currentShapes.find(sh => sh.id === id);
           if (!s) return null;
           const snapPos = snapToGrid(s.x + dx, s.y + dy);
           return { id, changes: { x: snapPos.x, y: snapPos.y } };
