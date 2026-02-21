@@ -1366,6 +1366,16 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     if (activeTool === 'pan') return isPanning ? 'grabbing' : 'grab';
     if (activeTool === 'connector') return 'crosshair';
     if (isSelecting) return 'crosshair';
+
+    // Show move cursor when hovering over selected shapes
+    if (hoveredShapeId && selectedShapeIds.includes(hoveredShapeId)) {
+      return 'move';
+    }
+    // Show pointer when hovering over any shape
+    if (hoveredShapeId) {
+      return 'pointer';
+    }
+
     return 'default';
   };
 
