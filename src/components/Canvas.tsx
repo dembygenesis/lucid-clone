@@ -173,8 +173,8 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         return;
       }
 
-      // Escape - cancel connection, clear selection, or close context menu
-      if (e.key === 'Escape') {
+      // Escape or minus - cancel connection, clear selection, or close context menu
+      if (e.key === 'Escape' || (e.key === '-' && !isMeta)) {
         if (contextMenu.visible) {
           setContextMenu({ ...contextMenu, visible: false });
         } else if (connectionState.isConnecting) {
