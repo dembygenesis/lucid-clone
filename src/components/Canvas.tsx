@@ -667,6 +667,13 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
     const handleClick = (e: KonvaEventObject<MouseEvent>) => {
       if (connectionState.isConnecting) return;
       e.cancelBubble = true;
+
+      // If shape is already selected and part of multi-selection, don't change selection
+      // This allows dragging multiple selected shapes without deselecting them
+      if (isSelected && selectedShapeIds.length > 1 && !e.evt.shiftKey) {
+        return;
+      }
+
       selectShape(shape.id, e.evt.shiftKey);
     };
 
@@ -684,6 +691,12 @@ export function Canvas({ width, height, stageRef: externalStageRef }: CanvasProp
         // We'll handle this through the store's duplicate functionality
         duplicate();
         return;
+      }
+
+      // If dragging a shape that's not selected, select it first
+      // (unless shift is held, then add to selection)
+      if (!isSelected) {
+        selectShape(shape.id, e.evt.shiftKey);
       }
 
       dragStartRef.current = {
